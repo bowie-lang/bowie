@@ -22,6 +22,7 @@ typedef enum {
     OBJ_RETURN,
     OBJ_ERROR,
     OBJ_HTTP_SERVER,
+    OBJ_PG_CONN,
 } ObjType;
 
 struct ObjList {
@@ -69,6 +70,7 @@ struct Object {
         struct { Object *value; }                               ret;
         struct { char *msg; }                                   error;
         struct { int port; int fd; Route *routes; Object *listen_cb; } server;
+        struct { void *conn; /* PGconn * when libpq is linked */ } pg;
     };
 };
 
@@ -85,6 +87,7 @@ Object *obj_builtin(BuiltinFn fn, const char *name);
 Object *obj_return(Object *val);
 Object *obj_errorf(const char *fmt, ...);
 Object *obj_http_server(int port, Object *listen_cb);
+Object *obj_pg_conn(void *pgconn);
 
 /* Reference counting */
 void obj_retain(Object *o);

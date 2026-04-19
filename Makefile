@@ -1,10 +1,37 @@
 CC      = cc
-CFLAGS  = -std=c11 -Wall -Wextra -Wno-unused-parameter -O2 -Isrc
-LDFLAGS = -lm
+PKG_CONFIG ?= pkg-config
+
+# PostgreSQL client (libpq): pkg-config, common Homebrew keg paths, or stub.
+ifneq ($(strip $(FORCE_POSTGRES_STUB)),1)
+  ifeq ($(shell $(PKG_CONFIG) --exists libpq 2>/dev/null && echo ok),ok)
+    POSTGRES_MODULE := src/postgres.c
+    POSTGRES_CFLAGS := $(shell $(PKG_CONFIG) --cflags libpq)
+    POSTGRES_LIBS   := $(shell $(PKG_CONFIG) --libs libpq)
+  else ifneq ($(wildcard /opt/homebrew/opt/libpq/include/libpq-fe.h),)
+    POSTGRES_MODULE := src/postgres.c
+    POSTGRES_CFLAGS := -I/opt/homebrew/opt/libpq/include
+    POSTGRES_LIBS   := -L/opt/homebrew/opt/libpq/lib -lpq
+  else ifneq ($(wildcard /usr/local/opt/libpq/include/libpq-fe.h),)
+    POSTGRES_MODULE := src/postgres.c
+    POSTGRES_CFLAGS := -I/usr/local/opt/libpq/include
+    POSTGRES_LIBS   := -L/usr/local/opt/libpq/lib -lpq
+  else
+    POSTGRES_MODULE := src/postgres_disabled.c
+    POSTGRES_CFLAGS :=
+    POSTGRES_LIBS   :=
+  endif
+else
+  POSTGRES_MODULE := src/postgres_disabled.c
+  POSTGRES_CFLAGS :=
+  POSTGRES_LIBS   :=
+endif
+
+CFLAGS  = -std=c11 -Wall -Wextra -Wno-unused-parameter -O2 -Isrc $(POSTGRES_CFLAGS)
+LDFLAGS = -lm $(POSTGRES_LIBS)
 TARGET  = bowie
 SRCS    = src/lexer.c src/ast.c src/object.c src/env.c \
           src/parser.c src/interpreter.c src/builtins.c \
-          src/http.c src/main.c
+          src/http.c $(POSTGRES_MODULE) src/main.c
 OBJS    = $(SRCS:.c=.o)
 
 .PHONY: all clean install
@@ -21,4 +48,6 @@ install: $(TARGET)
 	cp $(TARGET) /usr/local/bin/bowie
 
 clean:
-	rm -f $(OBJS) $(TARGET)
+	rm -f src/lexer.o src/ast.o src/object.o src/env.o src/parser.o \
+	      src/interpreter.o src/builtins.o src/http.o src/postgres.o \
+	      src/postgres_disabled.o src/main.o $(TARGET)

@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Defined in postgres.c — tears down libpq connection without pulling libpq into this TU. */
+void bowie_pg_conn_finish(void *conn);
+
 Object *BOWIE_NULL  = NULL;
 Object *BOWIE_TRUE  = NULL;
 Object *BOWIE_FALSE = NULL;
@@ -114,6 +117,12 @@ Object *obj_http_server(int port, Object *listen_cb) {
     return o;
 }
 
+Object *obj_pg_conn(void *pgconn) {
+    Object *o   = obj_new(OBJ_PG_CONN);
+    o->pg.conn = pgconn;
+    return o;
+}
+
 void obj_retain(Object *o) {
     if (o && o->refs < 1000) o->refs++;
 }
@@ -169,6 +178,12 @@ void obj_release(Object *o) {
             }
             break;
         }
+        case OBJ_PG_CONN:
+            if (o->pg.conn) {
+                bowie_pg_conn_finish(o->pg.conn);
+                o->pg.conn = NULL;
+            }
+            break;
         default: break;
     }
     free(o);
@@ -326,6 +341,8 @@ char *obj_inspect(Object *o) {
         case OBJ_HTTP_SERVER:
             snprintf(buf, sizeof(buf), "<server port=%d>", o->server.port);
             return strdup(buf);
+        case OBJ_PG_CONN:
+            return strdup(o->pg.conn ? "<pg_conn>" : "<pg_conn closed>");
     }
     return strdup("unknown");
 }
@@ -344,6 +361,7 @@ const char *obj_type_name(ObjType t) {
         case OBJ_RETURN:      return "return";
         case OBJ_ERROR:       return "error";
         case OBJ_HTTP_SERVER: return "server";
+        case OBJ_PG_CONN:     return "pg_conn";
     }
     return "unknown";
 }
@@ -354,6 +372,7 @@ int obj_is_truthy(Object *o) {
     if (o->type == OBJ_INT)         return o->int_val != 0;
     if (o->type == OBJ_FLOAT)       return o->float_val != 0.0;
     if (o->type == OBJ_STRING)      return o->string.str[0] != '\0';
+    if (o->type == OBJ_PG_CONN)     return o->pg.conn != NULL;
     return 1;
 }
 

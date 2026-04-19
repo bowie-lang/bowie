@@ -1,5 +1,6 @@
 #include "builtins.h"
 #include "interpreter.h"
+#include "postgres.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1261,6 +1262,9 @@ void builtins_register(Env *env) {
     REG("create_server",  bw_create_server);
     REG("route",       bw_route);
     REG("serve",       bw_serve);
+
+    /* PostgreSQL */
+    postgres_register(env);
 
     /* Misc */
     REG("exit",        bw_exit);
