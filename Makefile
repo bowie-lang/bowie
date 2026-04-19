@@ -26,8 +26,28 @@ else
   POSTGRES_LIBS   :=
 endif
 
-CFLAGS  = -std=c11 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -Wall -Wextra -Wno-unused-parameter -O2 -Isrc $(POSTGRES_CFLAGS)
-LDFLAGS = -lm $(POSTGRES_LIBS)
+# libcurl (fetch HTTPS support): pkg-config, common Homebrew keg paths, or disabled.
+ifneq ($(strip $(FORCE_CURL_STUB)),1)
+  ifeq ($(shell $(PKG_CONFIG) --exists libcurl 2>/dev/null && echo ok),ok)
+    CURL_CFLAGS := $(shell $(PKG_CONFIG) --cflags libcurl) -DBOWIE_CURL
+    CURL_LIBS   := $(shell $(PKG_CONFIG) --libs libcurl)
+  else ifneq ($(wildcard /opt/homebrew/opt/curl/include/curl/curl.h),)
+    CURL_CFLAGS := -I/opt/homebrew/opt/curl/include -DBOWIE_CURL
+    CURL_LIBS   := -L/opt/homebrew/opt/curl/lib -lcurl
+  else ifneq ($(wildcard /usr/local/opt/curl/include/curl/curl.h),)
+    CURL_CFLAGS := -I/usr/local/opt/curl/include -DBOWIE_CURL
+    CURL_LIBS   := -L/usr/local/opt/curl/lib -lcurl
+  else
+    CURL_CFLAGS :=
+    CURL_LIBS   :=
+  endif
+else
+  CURL_CFLAGS :=
+  CURL_LIBS   :=
+endif
+
+CFLAGS  = -std=c11 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -Wall -Wextra -Wno-unused-parameter -O2 -Isrc $(POSTGRES_CFLAGS) $(CURL_CFLAGS)
+LDFLAGS = -lm $(POSTGRES_LIBS) $(CURL_LIBS)
 TARGET  = bowie
 SRCS    = src/lexer.c src/ast.c src/object.c src/env.c \
           src/parser.c src/interpreter.c src/builtins.c \

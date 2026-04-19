@@ -8,6 +8,7 @@
 
 #ifdef _WIN32
   #include <winsock2.h>
+  #include <ws2tcpip.h>
   typedef int socklen_t;
   #define close closesocket
 #else
@@ -15,6 +16,7 @@
   #include <sys/socket.h>
   #include <netinet/in.h>
   #include <arpa/inet.h>
+  #include <netdb.h>
   #include <unistd.h>
   #include <signal.h>
 #endif
@@ -520,3 +522,277 @@ void http_serve(Object *server, Interpreter *it, Env *env) {
     if (fd6 >= 0) close(fd6);
     free(buf);
 }
+
+/* ---- Outbound fetch ---- */
+
+#ifdef BOWIE_CURL
+#include <curl/curl.h>
+
+typedef struct { char *data; size_t len; size_t cap; } DynBuf;
+
+static size_t curl_body_cb(char *ptr, size_t size, size_t nmemb, void *ud) {
+    DynBuf *b = (DynBuf *)ud;
+    size_t n = size * nmemb;
+    if (b->len + n + 1 >= b->cap) {
+        b->cap = (b->len + n + 1) * 2;
+        b->data = realloc(b->data, b->cap);
+    }
+    memcpy(b->data + b->len, ptr, n);
+    b->len += n;
+    b->data[b->len] = '\0';
+    return n;
+}
+
+static size_t curl_header_cb(char *ptr, size_t size, size_t nmemb, void *ud) {
+    Object *hdrs = (Object *)ud;
+    size_t n = size * nmemb;
+    /* Skip status line and blank line */
+    if (n < 2 || ptr[0] == '\r' || strncmp(ptr, "HTTP/", 5) == 0) return n;
+    char *colon = memchr(ptr, ':', n);
+    if (!colon) return n;
+    int klen = (int)(colon - ptr);
+    char key[256];
+    if (klen >= (int)sizeof(key)) return n;
+    memcpy(key, ptr, klen); key[klen] = '\0';
+    for (int i = 0; key[i]; i++) key[i] = (char)tolower((unsigned char)key[i]);
+    const char *val = colon + 1;
+    while (*val == ' ') val++;
+    int vlen = (int)(ptr + n - val);
+    while (vlen > 0 && (val[vlen-1] == '\r' || val[vlen-1] == '\n')) vlen--;
+    char val_buf[2048];
+    if (vlen < (int)sizeof(val_buf)) {
+        memcpy(val_buf, val, vlen); val_buf[vlen] = '\0';
+        Object *vs = obj_string(val_buf);
+        hash_set(hdrs, key, vs);
+        obj_release(vs);
+    }
+    return n;
+}
+
+Object *http_fetch(const char *url, const char *method,
+                   Object *req_headers, const char *body) {
+    CURL *curl = curl_easy_init();
+    if (!curl) return obj_errorf("fetch: failed to initialise curl");
+
+    DynBuf resp_body = { malloc(4096), 0, 4096 };
+    resp_body.data[0] = '\0';
+    Object *resp_hdrs = obj_hash();
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_body_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp_body);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, curl_header_cb);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, resp_hdrs);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+
+    /* Method */
+    if (strcmp(method, "POST") == 0) curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    else if (strcmp(method, "PUT") == 0) curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
+    else if (strcmp(method, "GET") != 0)
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
+
+    /* Body */
+    if (body) {
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
+    }
+
+    /* Request headers */
+    struct curl_slist *hlist = NULL;
+    if (req_headers && req_headers->type == OBJ_HASH) {
+        for (int i = 0; i < 64; i++) {
+            for (HashEntry *e = req_headers->hash.buckets[i]; e; e = e->next) {
+                char *v = obj_inspect(e->value);
+                char line[1024];
+                snprintf(line, sizeof(line), "%s: %s", e->key, v);
+                free(v);
+                hlist = curl_slist_append(hlist, line);
+            }
+        }
+    }
+    if (hlist) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hlist);
+
+    CURLcode rc = curl_easy_perform(curl);
+    if (rc != CURLE_OK) {
+        curl_easy_cleanup(curl);
+        if (hlist) curl_slist_free_all(hlist);
+        obj_release(resp_hdrs);
+        free(resp_body.data);
+        return obj_errorf("fetch: %s", curl_easy_strerror(rc));
+    }
+
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    curl_easy_cleanup(curl);
+    if (hlist) curl_slist_free_all(hlist);
+
+    Object *resp      = obj_hash();
+    Object *status_o  = obj_int(status);
+    Object *ok_o      = obj_bool(status >= 200 && status < 300);
+    Object *body_o    = obj_string(resp_body.data);
+    hash_set(resp, "status",  status_o);
+    hash_set(resp, "ok",      ok_o);
+    hash_set(resp, "headers", resp_hdrs);
+    hash_set(resp, "body",    body_o);
+    obj_release(status_o); obj_release(ok_o);
+    obj_release(resp_hdrs); obj_release(body_o);
+    free(resp_body.data);
+    return resp;
+}
+
+#else  /* plain-socket HTTP-only fallback */
+
+typedef struct { char host[256]; int port; char path[2048]; } ParsedURL;
+
+static int parse_url(const char *url, ParsedURL *out) {
+    if (strncmp(url, "https://", 8) == 0)
+        return -1; /* HTTPS not supported */
+    if (strncmp(url, "http://", 7) != 0)
+        return 0;
+    const char *p = url + 7;
+
+    const char *slash = strchr(p, '/');
+    const char *colon = strchr(p, ':');
+    if (colon && (!slash || colon < slash)) {
+        int hlen = (int)(colon - p);
+        if (hlen >= (int)sizeof(out->host)) hlen = sizeof(out->host) - 1;
+        memcpy(out->host, p, hlen); out->host[hlen] = '\0';
+        out->port = atoi(colon + 1);
+    } else {
+        int hlen = slash ? (int)(slash - p) : (int)strlen(p);
+        if (hlen >= (int)sizeof(out->host)) hlen = sizeof(out->host) - 1;
+        memcpy(out->host, p, hlen); out->host[hlen] = '\0';
+        out->port = 80;
+    }
+    if (slash)
+        snprintf(out->path, sizeof(out->path), "%s", slash);
+    else
+        strcpy(out->path, "/");
+    return 1;
+}
+
+Object *http_fetch(const char *url, const char *method,
+                   Object *req_headers, const char *body) {
+    ParsedURL parsed;
+    int r = parse_url(url, &parsed);
+    if (r == -1)
+        return obj_errorf("fetch: HTTPS is not supported (use an http:// URL)");
+    if (r == 0)
+        return obj_errorf("fetch: invalid URL '%s' (only http:// is supported)", url);
+
+#ifdef _WIN32
+    WSADATA wsa; WSAStartup(MAKEWORD(2,2), &wsa);
+#endif
+
+    char port_str[8];
+    snprintf(port_str, sizeof(port_str), "%d", parsed.port);
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(parsed.host, port_str, &hints, &res) != 0)
+        return obj_errorf("fetch: cannot resolve host '%s'", parsed.host);
+
+    int fd = -1;
+    for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) continue;
+        if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
+        close(fd); fd = -1;
+    }
+    freeaddrinfo(res);
+    if (fd < 0)
+        return obj_errorf("fetch: cannot connect to '%s:%d'", parsed.host, parsed.port);
+
+    /* Build request — use HTTP/1.0 to avoid chunked encoding */
+    int body_len = body ? (int)strlen(body) : 0;
+    char req_buf[16384];
+    int  rlen = snprintf(req_buf, sizeof(req_buf),
+                         "%s %s HTTP/1.0\r\n"
+                         "Host: %s\r\n"
+                         "Connection: close\r\n",
+                         method, parsed.path, parsed.host);
+    if (req_headers && req_headers->type == OBJ_HASH) {
+        for (int i = 0; i < 64 && rlen < (int)sizeof(req_buf) - 512; i++) {
+            for (HashEntry *e = req_headers->hash.buckets[i]; e; e = e->next) {
+                char *v = obj_inspect(e->value);
+                rlen += snprintf(req_buf + rlen, sizeof(req_buf) - rlen,
+                                 "%s: %s\r\n", e->key, v);
+                free(v);
+            }
+        }
+    }
+    if (body_len > 0)
+        rlen += snprintf(req_buf + rlen, sizeof(req_buf) - rlen,
+                         "Content-Length: %d\r\n", body_len);
+    rlen += snprintf(req_buf + rlen, sizeof(req_buf) - rlen, "\r\n");
+    send(fd, req_buf, rlen, 0);
+    if (body_len > 0) send(fd, body, body_len, 0);
+
+    /* Read full response */
+    size_t cap = 65536, len = 0;
+    char *buf = malloc(cap);
+    for (;;) {
+        if (len + 1 >= cap) { cap *= 2; buf = realloc(buf, cap); }
+        int n = (int)recv(fd, buf + len, cap - len - 1, 0);
+        if (n <= 0) break;
+        len += n;
+    }
+    buf[len] = '\0';
+    close(fd);
+
+    /* Parse status line */
+    int status = 0;
+    const char *p = buf;
+    const char *eol = strstr(p, "\r\n");
+    if (eol) { sscanf(p, "HTTP/%*s %d", &status); p = eol + 2; }
+
+    /* Parse response headers */
+    Object *resp_hdrs = obj_hash();
+    while (p < buf + len && !(p[0] == '\r' && p[1] == '\n')) {
+        const char *line_end = strstr(p, "\r\n");
+        if (!line_end) break;
+        const char *col = (const char *)memchr(p, ':', line_end - p);
+        if (col) {
+            char key[256]; int klen = (int)(col - p);
+            if (klen < (int)sizeof(key)) {
+                memcpy(key, p, klen); key[klen] = '\0';
+                for (int i = 0; key[i]; i++) key[i] = (char)tolower((unsigned char)key[i]);
+                const char *val = col + 1; while (*val == ' ') val++;
+                int vlen = (int)(line_end - val);
+                char val_buf[2048];
+                if (vlen < (int)sizeof(val_buf)) {
+                    memcpy(val_buf, val, vlen); val_buf[vlen] = '\0';
+                    Object *vs = obj_string(val_buf);
+                    hash_set(resp_hdrs, key, vs);
+                    obj_release(vs);
+                }
+            }
+        }
+        p = line_end + 2;
+    }
+    if (p[0] == '\r' && p[1] == '\n') p += 2;
+
+    /* Body — copy to null-terminated buffer */
+    int blen = (int)((buf + len) - p);
+    char *body_copy = malloc(blen + 1);
+    memcpy(body_copy, p, blen); body_copy[blen] = '\0';
+    Object *body_str = obj_string(body_copy);
+    free(body_copy);
+
+    Object *resp = obj_hash();
+    Object *status_obj = obj_int(status);
+    Object *ok_obj     = obj_bool(status >= 200 && status < 300);
+    hash_set(resp, "status",  status_obj);
+    hash_set(resp, "ok",      ok_obj);
+    hash_set(resp, "headers", resp_hdrs);
+    hash_set(resp, "body",    body_str);
+    obj_release(status_obj);
+    obj_release(resp_hdrs);
+    obj_release(body_str);
+
+    free(buf);
+    return resp;
+}
+
+#endif /* BOWIE_CURL */

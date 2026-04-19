@@ -1,4 +1,5 @@
 #include "builtins.h"
+#include "http.h"
 #include "interpreter.h"
 #include "postgres.h"
 #include <stdio.h>
@@ -1157,6 +1158,29 @@ void builtins_set_interp(Interpreter *it, Env *env) {
     _global_env    = env;
 }
 
+/* ---- fetch ---- */
+static Object *bw_fetch(ObjList *args) {
+    if (NARGS < 1 || ARG(0)->type != OBJ_STRING)
+        return obj_errorf("fetch(): first argument must be a url string");
+
+    const char *url    = ARG(0)->string.str;
+    const char *method = "GET";
+    Object     *hdrs   = NULL;
+    const char *body   = NULL;
+
+    if (NARGS >= 2 && ARG(1)->type == OBJ_HASH) {
+        Object *opts = ARG(1);
+        Object *m = hash_get(opts, "method");
+        if (m && m->type == OBJ_STRING) method = m->string.str;
+        Object *h = hash_get(opts, "headers");
+        if (h && h->type == OBJ_HASH) hdrs = h;
+        Object *b = hash_get(opts, "body");
+        if (b && b->type == OBJ_STRING) body = b->string.str;
+    }
+
+    return http_fetch(url, method, hdrs, body);
+}
+
 /* ---- Misc ---- */
 static Object *bw_exit(ObjList *args) {
     int code = NARGS > 0 && ARG(0)->type == OBJ_INT ? (int)ARG(0)->int_val : 0;
@@ -1259,6 +1283,7 @@ void builtins_register(Env *env) {
     REG("json_decode", bw_json_decode);
 
     /* HTTP */
+    REG("fetch",          bw_fetch);
     REG("create_server",  bw_create_server);
     REG("route",       bw_route);
     REG("serve",       bw_serve);
