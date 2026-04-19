@@ -17,6 +17,7 @@ typedef struct {
     ModCache *cache;          /* loaded module cache */
     Object   *exports;        /* current module's export hash (NULL in main) */
     char     *current_file;   /* path of the file being evaluated */
+    char     *project_root;   /* directory of the entry-point file; resolves "@/" aliases */
 } Interpreter;
 
 Interpreter *interp_new(void);

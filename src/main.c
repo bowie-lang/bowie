@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -75,6 +76,22 @@ static void run_source(const char *source, const char *filename) {
 
     Interpreter *interp  = interp_new();
     interp->current_file = (char *)filename;
+
+    /* Compute project root (absolute directory of the entry-point file) for "@/" aliases */
+    {
+        char abs[PATH_MAX];
+        if (realpath(filename, abs)) {
+            char *sl = strrchr(abs, '/');
+            if (sl) *sl = '\0';
+            interp->project_root = strdup(abs);
+        } else {
+            char *root = strdup(filename);
+            char *sl   = strrchr(root, '/');
+            if (sl) { *sl = '\0'; interp->project_root = root; }
+            else    { free(root); interp->project_root = strdup("."); }
+        }
+    }
+
     builtins_set_interp(interp, interp->globals);
 
     Object *result = interp_eval(interp, ast, interp->globals);
@@ -155,6 +172,7 @@ int main(int argc, char *argv[]) {
         free(src);
         return 0;
     }
+
 
     fprintf(stderr, "Usage: bowie [script.bow]\n");
     return 1;

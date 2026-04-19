@@ -526,7 +526,18 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
 
         /* --- Import --- */
         case NODE_IMPORT: {
-            char *resolved = resolve_path(it->current_file, n->import_.path);
+            const char *raw = n->import_.path;
+            char *aliased = NULL;
+            if (it->project_root && raw[0] == '@' && raw[1] == '/') {
+                size_t rlen = strlen(it->project_root);
+                size_t plen = strlen(raw + 1);
+                aliased = malloc(rlen + plen + 1);
+                memcpy(aliased, it->project_root, rlen);
+                memcpy(aliased + rlen, raw + 1, plen + 1);
+                raw = aliased;
+            }
+            char *resolved = resolve_path(it->current_file, raw);
+            free(aliased);
             Object *mod = interp_load_module(it, resolved);
             free(resolved);
             if (IS_ERR(mod)) return mod;
@@ -640,6 +651,7 @@ Interpreter *interp_new(void) {
 }
 
 void interp_free(Interpreter *it) {
+    free(it->project_root);
     ModCache *c = it->cache;
     while (c) {
         ModCache *next = c->next;
