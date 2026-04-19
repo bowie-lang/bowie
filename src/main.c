@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +10,14 @@
 
 /* Declared in builtins.c */
 void builtins_set_interp(Interpreter *it, Env *env);
+
+static char *dup_cstr(const char *s) {
+    size_t len = strlen(s) + 1;
+    char *copy = malloc(len);
+    if (!copy) return NULL;
+    memcpy(copy, s, len);
+    return copy;
+}
 
 /* stdin is not seekable; avoid fseek/ftell (can hang or mis-size). */
 static char *read_stdin_all(void) {
@@ -55,8 +62,12 @@ static char *read_file(const char *path) {
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
     char *buf = malloc(sz + 1);
-    fread(buf, 1, sz, f);
-    buf[sz] = '\0';
+    if (!buf) {
+        fclose(f);
+        return NULL;
+    }
+    size_t n = fread(buf, 1, sz, f);
+    buf[n] = '\0';
     fclose(f);
     return buf;
 }
@@ -79,16 +90,20 @@ static void run_source(const char *source, const char *filename) {
 
     /* Compute project root (absolute directory of the entry-point file) for "@/" aliases */
     {
-        char abs[PATH_MAX];
-        if (realpath(filename, abs)) {
+        char *abs = realpath(filename, NULL);
+        if (abs) {
             char *sl = strrchr(abs, '/');
             if (sl) *sl = '\0';
-            interp->project_root = strdup(abs);
+            interp->project_root = dup_cstr(abs);
+            free(abs);
         } else {
-            char *root = strdup(filename);
-            char *sl   = strrchr(root, '/');
-            if (sl) { *sl = '\0'; interp->project_root = root; }
-            else    { free(root); interp->project_root = strdup("."); }
+            char *root = dup_cstr(filename);
+            if (!root) interp->project_root = NULL;
+            else {
+                char *sl = strrchr(root, '/');
+                if (sl) { *sl = '\0'; interp->project_root = root; }
+                else    { free(root); interp->project_root = dup_cstr("."); }
+            }
         }
     }
 
