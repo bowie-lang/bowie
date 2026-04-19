@@ -9,6 +9,11 @@
 #include <math.h>
 #include <errno.h>
 
+#ifndef _WIN32
+#include "coro.h"
+#include "event_loop.h"
+#endif
+
 static char *dup_cstr(const char *s) {
     size_t len = strlen(s) + 1;
     char *copy = malloc(len);
@@ -263,6 +268,16 @@ static Object *eval_call(Interpreter *it, Node *n, Env *env) {
                                 n->line,
                                 fn->fn.name ? fn->fn.name : "fn",
                                 fn->fn.param_count, args.count);
+#ifndef _WIN32
+        } else if (fn->fn.is_async && g_event_loop) {
+            Object *promise = obj_promise();
+            Coro *coro = coro_new(it, fn, &args, promise);
+            event_loop_enqueue(coro);
+            for (int i = 0; i < args.count; i++) obj_release(args.items[i]);
+            free(args.items);
+            obj_release(fn);
+            return promise;
+#endif
         } else {
             Env *fn_env = env_new(fn->fn.closure);
             for (int i = 0; i < fn->fn.param_count; i++) {
@@ -509,7 +524,8 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
             char **params = malloc(n->fn.param_count * sizeof(char *));
             for (int i = 0; i < n->fn.param_count; i++)
                 params[i] = dup_cstr(n->fn.params[i]);
-            Object *fn = obj_function(params, n->fn.param_count, n->fn.body, env, n->fn.name);
+            Object *fn = obj_function(params, n->fn.param_count, n->fn.body, env,
+                                      n->fn.name, n->fn.is_async);
             return fn;
         }
 
@@ -528,6 +544,52 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
         /* --- Break / Continue --- */
         case NODE_BREAK:    return obj_break();
         case NODE_CONTINUE: return obj_continue();
+
+        /* --- Await --- */
+        case NODE_AWAIT: {
+            Object *val = eval_node(it, n->await_.expr, env);
+            if (IS_ERR(val)) return val;
+            if (!val || val->type != OBJ_PROMISE) return val; /* non-promise: pass through */
+
+            /* Already settled */
+            if (val->promise.state == 1) { /* FULFILLED */
+                Object *v = val->promise.value;
+                if (v) obj_retain(v); else v = obj_null();
+                obj_release(val);
+                return v;
+            }
+            if (val->promise.state == 2) { /* REJECTED */
+                Object *err = val->promise.value;
+                if (err) { obj_retain(err); obj_release(val); return err; }
+                obj_release(val);
+                return obj_errorf("promise rejected");
+            }
+
+            /* PENDING */
+#ifndef _WIN32
+            Coro *self = g_running_coro;
+            if (self) {
+                /* Inside a coroutine: register as waiter and yield */
+                promise_add_waiter(val, self);
+                obj_release(val);
+                coro_yield();
+                /* Resumed: result placed in self->result by promise_resolve */
+                Object *res = self->result;
+                self->result = NULL;
+                return res ? res : obj_null();
+            }
+            /* Top-level await: drive the event loop until resolved */
+            event_loop_run();
+            if (val->promise.state == 1) {
+                Object *v = val->promise.value;
+                if (v) obj_retain(v); else v = obj_null();
+                obj_release(val);
+                return v;
+            }
+#endif
+            obj_release(val);
+            return obj_errorf("await: promise never resolved");
+        }
 
         /* --- Return --- */
         case NODE_RETURN: {
@@ -620,6 +682,31 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
         default:
             return obj_errorf("eval: unknown node type %d", n->type);
     }
+}
+
+/* ---- Call a Bowie function (used by coro trampoline) ---- */
+Object *interp_call_fn(Interpreter *it, Object *fn, ObjList *args) {
+    if (!fn) return obj_null();
+    if (fn->type == OBJ_BUILTIN)
+        return fn->builtin.fn(args);
+    if (fn->type != OBJ_FUNCTION)
+        return obj_errorf("not a function: %s", obj_type_name(fn->type));
+    if (args->count != fn->fn.param_count)
+        return obj_errorf("%s expects %d args, got %d",
+                          fn->fn.name ? fn->fn.name : "fn",
+                          fn->fn.param_count, args->count);
+    Env *fn_env = env_new(fn->fn.closure);
+    for (int i = 0; i < fn->fn.param_count; i++)
+        env_set(fn_env, fn->fn.params[i], args->items[i]);
+    Object *result = eval_block(it, fn->fn.body, fn_env);
+    if (IS_RET(result)) {
+        Object *v = result->ret.value;
+        obj_retain(v);
+        obj_release(result);
+        result = v;
+    }
+    env_release(fn_env);
+    return result;
 }
 
 /* ---- Module loader ---- */

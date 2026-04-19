@@ -328,6 +328,15 @@ static Node *parse_expr(Parser *p, Prec prec) {
         case TOK_LBRACE:    left = parse_hash_lit(p);  break;
         case TOK_FN:        left = parse_fn(p);      break;
         case TOK_IF:        left = parse_if(p);      break;
+        case TOK_AWAIT: {
+            int line = p->cur.line;
+            advance(p);
+            Node *expr = parse_expr(p, PREC_PREFIX);
+            Node *n    = node_new(NODE_AWAIT, line);
+            n->await_.expr = expr;
+            left = n;
+            break;
+        }
         default:
             set_error(p, "line %d: unexpected token '%s' in expression",
                       p->cur.line, tok_name(p->cur.type));
@@ -530,6 +539,23 @@ static Node *parse_stmt(Parser *p) {
             Node *n = make_incr(name, op, line);
             advance(p);
             if (cur_is(p, TOK_SEMICOLON)) advance(p);
+            return n;
+        }
+        case TOK_ASYNC: {
+            int line = p->cur.line;
+            advance(p); /* consume async */
+            if (!cur_is(p, TOK_FN)) {
+                set_error(p, "line %d: expected 'fn' after 'async'", line);
+                return NULL;
+            }
+            Node *fn = parse_fn(p);
+            if (!fn) return NULL;
+            fn->fn.is_async = 1;
+            if (!fn->fn.name) return fn; /* anonymous async fn expr */
+            char *name = strdup(fn->fn.name);
+            Node *n    = node_new(NODE_LET, line);
+            n->let.name  = name;
+            n->let.value = fn;
             return n;
         }
         case TOK_WHILE:  return parse_while(p);

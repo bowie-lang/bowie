@@ -29,6 +29,8 @@ typedef enum {
     TOK_USE,
     TOK_BREAK,
     TOK_CONTINUE,
+    TOK_ASYNC,
+    TOK_AWAIT,
 
     /* Compound operators */
     TOK_PLUSPLUS,

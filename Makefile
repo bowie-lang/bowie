@@ -46,12 +46,13 @@ else
   CURL_LIBS   :=
 endif
 
-CFLAGS  = -std=c11 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -Wall -Wextra -Wno-unused-parameter -O2 -Isrc $(POSTGRES_CFLAGS) $(CURL_CFLAGS)
+CFLAGS  = -std=c11 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -D_XOPEN_SOURCE=700 -Wall -Wextra -Wno-unused-parameter -O2 -Isrc $(POSTGRES_CFLAGS) $(CURL_CFLAGS)
 LDFLAGS = -lm $(POSTGRES_LIBS) $(CURL_LIBS)
 TARGET  = bowie
 SRCS    = src/lexer.c src/ast.c src/object.c src/env.c \
           src/parser.c src/interpreter.c src/builtins.c \
-          src/http.c $(POSTGRES_MODULE) src/main.c
+          src/http.c src/coro.c src/event_loop.c \
+          $(POSTGRES_MODULE) src/main.c
 OBJS    = $(SRCS:.c=.o)
 
 .PHONY: all clean install
@@ -69,5 +70,6 @@ install: $(TARGET)
 
 clean:
 	rm -f src/lexer.o src/ast.o src/object.o src/env.o src/parser.o \
-	      src/interpreter.o src/builtins.o src/http.o src/postgres.o \
+	      src/interpreter.o src/builtins.o src/http.o src/coro.o \
+	      src/event_loop.o src/postgres.o \
 	      src/postgres_disabled.o src/main.o $(TARGET)

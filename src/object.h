@@ -25,6 +25,7 @@ typedef enum {
     OBJ_ERROR,
     OBJ_HTTP_SERVER,
     OBJ_PG_CONN,
+    OBJ_PROMISE,
 } ObjType;
 
 struct ObjList {
@@ -67,12 +68,20 @@ struct Object {
             Node   *body;
             Env    *closure;
             char   *name;
+            int     is_async;
         } fn;
         struct { BuiltinFn fn; const char *name; }             builtin;
         struct { Object *value; }                               ret;
         struct { char *msg; }                                   error;
         struct { int port; int fd; Route *routes; Object *listen_cb; } server;
         struct { void *conn; /* PGconn * when libpq is linked */ } pg;
+        struct {
+            int    state;          /* 0=PENDING 1=FULFILLED 2=REJECTED */
+            Object *value;
+            void  **waiters;       /* Coro * array (opaque to avoid circular dep) */
+            int     waiter_count;
+            int     waiter_cap;
+        } promise;
     };
 };
 
@@ -84,7 +93,8 @@ Object *obj_bool(int val);
 Object *obj_null(void);
 Object *obj_array(void);
 Object *obj_hash(void);
-Object *obj_function(char **params, int pc, Node *body, Env *closure, const char *name);
+Object *obj_function(char **params, int pc, Node *body, Env *closure, const char *name, int is_async);
+Object *obj_promise(void);
 Object *obj_builtin(BuiltinFn fn, const char *name);
 Object *obj_return(Object *val);
 Object *obj_break(void);

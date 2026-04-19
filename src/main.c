@@ -7,6 +7,9 @@
 #include "parser.h"
 #include "interpreter.h"
 #include "builtins.h"
+#ifndef _WIN32
+#include "event_loop.h"
+#endif
 
 /* Declared in builtins.c */
 void builtins_set_interp(Interpreter *it, Env *env);
@@ -109,6 +112,10 @@ static void run_source(const char *source, const char *filename) {
 
     builtins_set_interp(interp, interp->globals);
 
+#ifndef _WIN32
+    event_loop_init();
+#endif
+
     Object *result = interp_eval(interp, ast, interp->globals);
 
     if (result && result->type == OBJ_ERROR) {
@@ -122,6 +129,12 @@ static void run_source(const char *source, const char *filename) {
     }
 
     obj_release(result);
+
+#ifndef _WIN32
+    event_loop_run();
+    event_loop_free();
+#endif
+
     interp_free(interp);
     node_free(ast);
     parser_free(parser);

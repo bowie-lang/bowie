@@ -81,14 +81,25 @@ Object *obj_hash(void) {
     return o;
 }
 
-Object *obj_function(char **params, int pc, Node *body, Env *closure, const char *name) {
+Object *obj_function(char **params, int pc, Node *body, Env *closure, const char *name, int is_async) {
     Object *o        = obj_new(OBJ_FUNCTION);
     o->fn.params     = params;
     o->fn.param_count= pc;
     o->fn.body       = body;
     o->fn.closure    = closure;
     o->fn.name       = name ? strdup(name) : NULL;
+    o->fn.is_async   = is_async;
     if (closure) env_retain(closure);
+    return o;
+}
+
+Object *obj_promise(void) {
+    Object *o = obj_new(OBJ_PROMISE);
+    o->promise.state        = 0;
+    o->promise.value        = NULL;
+    o->promise.waiters      = NULL;
+    o->promise.waiter_count = 0;
+    o->promise.waiter_cap   = 0;
     return o;
 }
 
@@ -196,6 +207,10 @@ void obj_release(Object *o) {
                 bowie_pg_conn_finish(o->pg.conn);
                 o->pg.conn = NULL;
             }
+            break;
+        case OBJ_PROMISE:
+            if (o->promise.value) obj_release(o->promise.value);
+            free(o->promise.waiters); /* coros owned by event loop */
             break;
         default: break;
     }
@@ -360,6 +375,13 @@ char *obj_inspect(Object *o) {
             return strdup("break");
         case OBJ_CONTINUE:
             return strdup("continue");
+        case OBJ_PROMISE: {
+            const char *states[] = { "pending", "fulfilled", "rejected" };
+            int s = o->promise.state;
+            if (s < 0 || s > 2) s = 0;
+            snprintf(buf, sizeof(buf), "<Promise %s>", states[s]);
+            return strdup(buf);
+        }
     }
     return strdup("unknown");
 }
@@ -381,6 +403,7 @@ const char *obj_type_name(ObjType t) {
         case OBJ_ERROR:       return "error";
         case OBJ_HTTP_SERVER: return "server";
         case OBJ_PG_CONN:     return "pg_conn";
+        case OBJ_PROMISE:     return "promise";
     }
     return "unknown";
 }

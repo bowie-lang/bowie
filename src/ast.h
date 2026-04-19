@@ -36,6 +36,7 @@ typedef enum {
     NODE_FUNCTION,
     NODE_CALL,
     NODE_INDEX,
+    NODE_AWAIT,
 } NodeType;
 
 struct NodeList {
@@ -103,7 +104,10 @@ struct Node {
         struct { Node *cond; Node *then_; Node *else_; } if_;
 
         /* NODE_FUNCTION */
-        struct { char **params; int param_count; Node *body; char *name; } fn;
+        struct { char **params; int param_count; Node *body; char *name; int is_async; } fn;
+
+        /* NODE_AWAIT */
+        struct { Node *expr; } await_;
 
         /* NODE_CALL */
         struct { Node *fn; NodeList args; } call;

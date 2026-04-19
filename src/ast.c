@@ -111,6 +111,9 @@ void node_free(Node *n) {
         case NODE_EXPORT:
             node_free(n->export_.decl);
             break;
+        case NODE_AWAIT:
+            node_free(n->await_.expr);
+            break;
         default:
             break;
     }

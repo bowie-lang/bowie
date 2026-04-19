@@ -1,6 +1,10 @@
 #include "builtins.h"
 #include "http.h"
 #include "interpreter.h"
+#ifndef _WIN32
+#include "coro.h"
+#include "event_loop.h"
+#endif
 #include "postgres.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -1178,6 +1182,20 @@ static Object *bw_fetch(ObjList *args) {
         if (b && b->type == OBJ_STRING) body = b->string.str;
     }
 
+#ifndef _WIN32
+    if (g_running_coro) {
+#ifdef BOWIE_CURL
+        return event_loop_fetch_async(url, method, hdrs, body);
+#else
+        /* No curl: do sync request, wrap result in a pre-resolved promise */
+        Object *resp    = http_fetch(url, method, hdrs, body);
+        Object *promise = obj_promise();
+        promise_resolve(promise, resp);
+        obj_release(resp);
+        return promise;
+#endif
+    }
+#endif
     return http_fetch(url, method, hdrs, body);
 }
 

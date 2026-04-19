@@ -12,7 +12,7 @@ typedef struct ModCache {
     struct ModCache *next;
 } ModCache;
 
-typedef struct {
+typedef struct Interpreter {
     Env      *globals;
     ModCache *cache;          /* loaded module cache */
     Object   *exports;        /* current module's export hash (NULL in main) */
@@ -26,5 +26,8 @@ Object      *interp_eval(Interpreter *it, Node *node, Env *env);
 
 /* Load and evaluate a .bow file, returning its export hash */
 Object      *interp_load_module(Interpreter *it, const char *path);
+
+/* Call a Bowie function synchronously (used by coro trampoline) */
+Object      *interp_call_fn(Interpreter *it, Object *fn, ObjList *args);
 
 #endif
