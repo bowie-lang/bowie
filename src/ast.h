@@ -13,6 +13,8 @@ typedef enum {
     NODE_BLOCK,
     NODE_WHILE,
     NODE_FOR,
+    NODE_BREAK,
+    NODE_CONTINUE,
 
     /* Module system */
     NODE_IMPORT,

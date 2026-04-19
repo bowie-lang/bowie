@@ -478,11 +478,27 @@ static Node *parse_export(Parser *p) {
     return n;
 }
 
+static Node *parse_break(Parser *p) {
+    Node *n = node_new(NODE_BREAK, p->cur.line);
+    advance(p);
+    if (cur_is(p, TOK_SEMICOLON)) advance(p);
+    return n;
+}
+
+static Node *parse_continue(Parser *p) {
+    Node *n = node_new(NODE_CONTINUE, p->cur.line);
+    advance(p);
+    if (cur_is(p, TOK_SEMICOLON)) advance(p);
+    return n;
+}
+
 static Node *parse_stmt(Parser *p) {
     if (p->error) return NULL;
     switch (p->cur.type) {
-        case TOK_LET:    return parse_let(p);
-        case TOK_RETURN: return parse_return(p);
+        case TOK_LET:      return parse_let(p);
+        case TOK_RETURN:   return parse_return(p);
+        case TOK_BREAK:    return parse_break(p);
+        case TOK_CONTINUE: return parse_continue(p);
         case TOK_WHILE:  return parse_while(p);
         case TOK_FOR:    return parse_for(p);
         case TOK_IMPORT: return parse_import(p);

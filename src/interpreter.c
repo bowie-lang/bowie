@@ -83,6 +83,8 @@ static char *read_file_str(const char *path) {
 
 #define IS_ERR(o)  ((o) && (o)->type == OBJ_ERROR)
 #define IS_RET(o)  ((o) && (o)->type == OBJ_RETURN)
+#define IS_BRK(o)  ((o) && (o)->type == OBJ_BREAK)
+#define IS_CNT(o)  ((o) && (o)->type == OBJ_CONTINUE)
 
 static Object *eval_node(Interpreter *it, Node *n, Env *env);
 
@@ -229,7 +231,7 @@ static Object *eval_block(Interpreter *it, Node *block, Env *env) {
     for (int i = 0; i < block->block.stmts.count; i++) {
         obj_release(result);
         result = eval_node(it, block->block.stmts.items[i], env);
-        if (IS_ERR(result) || IS_RET(result)) return result;
+        if (IS_ERR(result) || IS_RET(result) || IS_BRK(result) || IS_CNT(result)) return result;
     }
     return result;
 }
@@ -473,6 +475,8 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
                 result = eval_block(it, n->while_.body, loop_env);
                 env_release(loop_env);
                 if (IS_ERR(result) || IS_RET(result)) return result;
+                if (IS_BRK(result)) { obj_release(result); result = obj_null(); break; }
+                if (IS_CNT(result)) { obj_release(result); result = obj_null(); continue; }
             }
             return result;
         }
@@ -493,6 +497,8 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
                 result = eval_block(it, n->for_.body, loop_env);
                 env_release(loop_env);
                 if (IS_ERR(result) || IS_RET(result)) break;
+                if (IS_BRK(result)) { obj_release(result); result = obj_null(); break; }
+                if (IS_CNT(result)) { obj_release(result); result = obj_null(); continue; }
             }
             obj_release(iter);
             return result;
@@ -518,6 +524,10 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
             obj_release(val);
             return obj_null();
         }
+
+        /* --- Break / Continue --- */
+        case NODE_BREAK:    return obj_break();
+        case NODE_CONTINUE: return obj_continue();
 
         /* --- Return --- */
         case NODE_RETURN: {

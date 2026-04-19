@@ -7,9 +7,11 @@
 /* Defined in postgres.c — tears down libpq connection without pulling libpq into this TU. */
 void bowie_pg_conn_finish(void *conn);
 
-Object *BOWIE_NULL  = NULL;
-Object *BOWIE_TRUE  = NULL;
-Object *BOWIE_FALSE = NULL;
+Object *BOWIE_NULL     = NULL;
+Object *BOWIE_TRUE     = NULL;
+Object *BOWIE_FALSE    = NULL;
+Object *BOWIE_BREAK    = NULL;
+Object *BOWIE_CONTINUE = NULL;
 
 void objects_init(void) {
     BOWIE_NULL        = calloc(1, sizeof(Object));
@@ -25,6 +27,14 @@ void objects_init(void) {
     BOWIE_FALSE->type     = OBJ_BOOL;
     BOWIE_FALSE->bool_val = 0;
     BOWIE_FALSE->refs     = 1000;
+
+    BOWIE_BREAK        = calloc(1, sizeof(Object));
+    BOWIE_BREAK->type  = OBJ_BREAK;
+    BOWIE_BREAK->refs  = 1000;
+
+    BOWIE_CONTINUE        = calloc(1, sizeof(Object));
+    BOWIE_CONTINUE->type  = OBJ_CONTINUE;
+    BOWIE_CONTINUE->refs  = 1000;
 }
 
 static Object *obj_new(ObjType type) {
@@ -95,6 +105,9 @@ Object *obj_return(Object *val) {
     obj_retain(val);
     return o;
 }
+
+Object *obj_break(void)    { return BOWIE_BREAK; }
+Object *obj_continue(void) { return BOWIE_CONTINUE; }
 
 Object *obj_errorf(const char *fmt, ...) {
     char buf[512];
@@ -343,6 +356,10 @@ char *obj_inspect(Object *o) {
             return strdup(buf);
         case OBJ_PG_CONN:
             return strdup(o->pg.conn ? "<pg_conn>" : "<pg_conn closed>");
+        case OBJ_BREAK:
+            return strdup("break");
+        case OBJ_CONTINUE:
+            return strdup("continue");
     }
     return strdup("unknown");
 }
@@ -359,6 +376,8 @@ const char *obj_type_name(ObjType t) {
         case OBJ_FUNCTION:    return "function";
         case OBJ_BUILTIN:     return "builtin";
         case OBJ_RETURN:      return "return";
+        case OBJ_BREAK:       return "break";
+        case OBJ_CONTINUE:    return "continue";
         case OBJ_ERROR:       return "error";
         case OBJ_HTTP_SERVER: return "server";
         case OBJ_PG_CONN:     return "pg_conn";

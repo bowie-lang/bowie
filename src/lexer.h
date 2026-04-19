@@ -27,6 +27,8 @@ typedef enum {
     TOK_EXPORT,
     TOK_AS,
     TOK_USE,
+    TOK_BREAK,
+    TOK_CONTINUE,
 
     /* Arithmetic */
     TOK_PLUS,

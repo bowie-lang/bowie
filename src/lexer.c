@@ -110,7 +110,9 @@ static Token read_ident(Lexer *l) {
     else if (!strcmp(val, "import")) type = TOK_IMPORT;
     else if (!strcmp(val, "export")) type = TOK_EXPORT;
     else if (!strcmp(val, "as"))     type = TOK_AS;
-    else if (!strcmp(val, "use"))    type = TOK_USE;
+    else if (!strcmp(val, "use"))      type = TOK_USE;
+    else if (!strcmp(val, "break"))    type = TOK_BREAK;
+    else if (!strcmp(val, "continue")) type = TOK_CONTINUE;
 
     return (Token){ type, val, line };
 }
@@ -190,6 +192,8 @@ const char *tok_name(TokenType t) {
         case TOK_EXPORT:    return "export";
         case TOK_AS:        return "as";
         case TOK_USE:       return "use";
+        case TOK_BREAK:     return "break";
+        case TOK_CONTINUE:  return "continue";
         case TOK_PLUS:      return "+";
         case TOK_MINUS:     return "-";
         case TOK_STAR:      return "*";

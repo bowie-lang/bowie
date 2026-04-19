@@ -20,6 +20,8 @@ typedef enum {
     OBJ_FUNCTION,
     OBJ_BUILTIN,
     OBJ_RETURN,
+    OBJ_BREAK,
+    OBJ_CONTINUE,
     OBJ_ERROR,
     OBJ_HTTP_SERVER,
     OBJ_PG_CONN,
@@ -85,6 +87,8 @@ Object *obj_hash(void);
 Object *obj_function(char **params, int pc, Node *body, Env *closure, const char *name);
 Object *obj_builtin(BuiltinFn fn, const char *name);
 Object *obj_return(Object *val);
+Object *obj_break(void);
+Object *obj_continue(void);
 Object *obj_errorf(const char *fmt, ...);
 Object *obj_http_server(int port, Object *listen_cb);
 Object *obj_pg_conn(void *pgconn);
@@ -117,6 +121,8 @@ void objlist_free(ObjList *l);
 extern Object *BOWIE_NULL;
 extern Object *BOWIE_TRUE;
 extern Object *BOWIE_FALSE;
+extern Object *BOWIE_BREAK;
+extern Object *BOWIE_CONTINUE;
 
 void objects_init(void);
 
