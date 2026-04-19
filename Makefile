@@ -26,7 +26,7 @@ else
   POSTGRES_LIBS   :=
 endif
 
-CFLAGS  = -std=c11 -Wall -Wextra -Wno-unused-parameter -O2 -Isrc $(POSTGRES_CFLAGS)
+CFLAGS  = -std=c11 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -Wall -Wextra -Wno-unused-parameter -O2 -Isrc $(POSTGRES_CFLAGS)
 LDFLAGS = -lm $(POSTGRES_LIBS)
 TARGET  = bowie
 SRCS    = src/lexer.c src/ast.c src/object.c src/env.c \
