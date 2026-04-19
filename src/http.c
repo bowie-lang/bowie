@@ -21,6 +21,24 @@
 
 #define BUF_SIZE (1024 * 64)
 
+static char *dup_cstr(const char *s) {
+    size_t len = strlen(s) + 1;
+    char *copy = malloc(len);
+    if (!copy) return NULL;
+    memcpy(copy, s, len);
+    return copy;
+}
+
+static int str_eq_ci(const char *a, const char *b) {
+    if (!a || !b) return 0;
+    while (*a && *b) {
+        unsigned char ca = (unsigned char)*a++;
+        unsigned char cb = (unsigned char)*b++;
+        if (tolower(ca) != tolower(cb)) return 0;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
 #ifndef _WIN32
 static volatile sig_atomic_t http_interrupt = 0;
 
@@ -84,7 +102,12 @@ static int listen_ipv6(uint16_t port) {
 /* ---- Request parsing ---- */
 static void parse_query(Object *req, const char *query_str) {
     Object *query = obj_hash();
-    char *copy    = strdup(query_str);
+    char *copy    = dup_cstr(query_str);
+    if (!copy) {
+        hash_set(req, "query", query);
+        obj_release(query);
+        return;
+    }
     char *token   = strtok(copy, "&");
     while (token) {
         char *eq = strchr(token, '=');
@@ -106,7 +129,8 @@ static Object *parse_request(const char *raw) {
     Object *hdrs = obj_hash();
 
     /* Copy so we can tokenize */
-    char *buf  = strdup(raw);
+    char *buf  = dup_cstr(raw);
+    if (!buf) { obj_release(hdrs); obj_release(req); return NULL; }
     char *line = strtok(buf, "\r\n");
     if (!line) { free(buf); obj_release(req); return NULL; }
 
@@ -172,20 +196,20 @@ static Route *match_route(Object *server, const char *method, const char *path,
     Route *r;
     r = server->server.routes;
     while (r) {
-        if (r->query_key && !strcasecmp(r->method, method) && !strcmp(r->path, path)
+        if (r->query_key && str_eq_ci(r->method, method) && !strcmp(r->path, path)
             && query_param_present(query, r->query_key))
             return r;
         r = r->next;
     }
     r = server->server.routes;
     while (r) {
-        if (!r->query_key && !strcasecmp(r->method, method) && !strcmp(r->path, path))
+        if (!r->query_key && str_eq_ci(r->method, method) && !strcmp(r->path, path))
             return r;
         r = r->next;
     }
     r = server->server.routes;
     while (r) {
-        if (!r->query_key && !strcasecmp(r->method, "*") && !strcmp(r->path, path)) return r;
+        if (!r->query_key && str_eq_ci(r->method, "*") && !strcmp(r->path, path)) return r;
         r = r->next;
     }
     r = server->server.routes;
@@ -421,14 +445,8 @@ void http_serve(Object *server, Interpreter *it, Env *env) {
     server->server.fd = fd4;
 
 #ifndef _WIN32
-    {
-        struct sigaction sa;
-        memset(&sa, 0, sizeof(sa));
-        sa.sa_handler = http_sig_handler;
-        sigemptyset(&sa.sa_mask);
-        sigaction(SIGINT, &sa, NULL);
-        sigaction(SIGTERM, &sa, NULL);
-    }
+    signal(SIGINT, http_sig_handler);
+    signal(SIGTERM, http_sig_handler);
 #endif
 
     char *buf = malloc(BUF_SIZE);
