@@ -476,6 +476,37 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
             return obj_null();
         }
 
+        /* --- Try / Catch / Finally --- */
+        case NODE_TRY: {
+            Env *try_env = env_new(env);
+            Object *result = eval_block(it, n->try_.try_block, try_env);
+            env_release(try_env);
+
+            if (IS_ERR(result) && n->try_.catch_block) {
+                Env *catch_env = env_new(env);
+                if (n->try_.catch_ident) {
+                    env_set(catch_env, n->try_.catch_ident, result);
+                }
+                Object *caught = eval_block(it, n->try_.catch_block, catch_env);
+                env_release(catch_env);
+                obj_release(result);
+                result = caught;
+            }
+
+            if (n->try_.finally_block) {
+                Env *finally_env = env_new(env);
+                Object *final_result = eval_block(it, n->try_.finally_block, finally_env);
+                env_release(finally_env);
+                if (IS_ERR(final_result) || IS_RET(final_result) || IS_BRK(final_result) || IS_CNT(final_result)) {
+                    obj_release(result);
+                    return final_result;
+                }
+                obj_release(final_result);
+            }
+
+            return result;
+        }
+
         /* --- While --- */
         case NODE_WHILE: {
             Object *result = obj_null();
@@ -598,6 +629,17 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
             Object *r = obj_return(val);
             obj_release(val);
             return r;
+        }
+
+        /* --- Throw --- */
+        case NODE_THROW: {
+            Object *val = eval_node(it, n->throw_.value, env);
+            if (IS_ERR(val)) return val;
+            char *msg = obj_inspect(val);
+            Object *err = obj_errorf("%s", msg ? msg : "throw");
+            free(msg);
+            obj_release(val);
+            return err;
         }
 
         /* --- Expression statement --- */

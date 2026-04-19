@@ -42,6 +42,9 @@ void node_free(Node *n) {
         case NODE_RETURN:
             node_free(n->ret.value);
             break;
+        case NODE_THROW:
+            node_free(n->throw_.value);
+            break;
         case NODE_EXPR_STMT:
             node_free(n->expr_stmt.expr);
             break;
@@ -53,6 +56,12 @@ void node_free(Node *n) {
             free(n->for_.var);
             node_free(n->for_.iter);
             node_free(n->for_.body);
+            break;
+        case NODE_TRY:
+            node_free(n->try_.try_block);
+            free(n->try_.catch_ident);
+            node_free(n->try_.catch_block);
+            node_free(n->try_.finally_block);
             break;
         case NODE_IDENT:
             free(n->ident.name);

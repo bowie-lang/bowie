@@ -31,6 +31,10 @@ typedef enum {
     TOK_CONTINUE,
     TOK_ASYNC,
     TOK_AWAIT,
+    TOK_TRY,
+    TOK_CATCH,
+    TOK_FINALLY,
+    TOK_THROW,
 
     /* Compound operators */
     TOK_PLUSPLUS,

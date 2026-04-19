@@ -13,8 +13,10 @@ typedef enum {
     NODE_BLOCK,
     NODE_WHILE,
     NODE_FOR,
+    NODE_TRY,
     NODE_BREAK,
     NODE_CONTINUE,
+    NODE_THROW,
 
     /* Module system */
     NODE_IMPORT,
@@ -61,6 +63,9 @@ struct Node {
         /* NODE_RETURN */
         struct { Node *value; } ret;
 
+        /* NODE_THROW */
+        struct { Node *value; } throw_;
+
         /* NODE_EXPR_STMT */
         struct { Node *expr; } expr_stmt;
 
@@ -69,6 +74,9 @@ struct Node {
 
         /* NODE_FOR */
         struct { char *var; Node *iter; Node *body; } for_;
+
+        /* NODE_TRY */
+        struct { Node *try_block; char *catch_ident; Node *catch_block; Node *finally_block; } try_;
 
         /* NODE_IDENT */
         struct { char *name; } ident;

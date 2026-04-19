@@ -405,6 +405,17 @@ static Node *parse_return(Parser *p) {
     return n;
 }
 
+static Node *parse_throw(Parser *p) {
+    int line = p->cur.line;
+    advance(p); /* skip throw */
+    Node *val = parse_expr(p, PREC_NONE);
+    if (!val) return NULL;
+    if (cur_is(p, TOK_SEMICOLON)) advance(p);
+    Node *n = node_new(NODE_THROW, line);
+    n->throw_.value = val;
+    return n;
+}
+
 static Node *parse_while(Parser *p) {
     int line = p->cur.line;
     advance(p); /* skip while */
@@ -433,6 +444,57 @@ static Node *parse_for(Parser *p) {
     n->for_.iter = iter;
     n->for_.body = body;
     return n;
+}
+
+static Node *parse_try(Parser *p) {
+    int line = p->cur.line;
+    advance(p); /* skip try */
+
+    Node *try_block = parse_block(p);
+    if (!try_block) return NULL;
+
+    char *catch_ident = NULL;
+    Node *catch_block = NULL;
+    Node *finally_block = NULL;
+
+    if (cur_is(p, TOK_CATCH)) {
+        advance(p); /* skip catch */
+        if (!expect(p, TOK_LPAREN)) goto fail;
+        if (!cur_is(p, TOK_IDENT)) {
+            set_error(p, "line %d: expected identifier in catch binding", p->cur.line);
+            goto fail;
+        }
+        catch_ident = strdup(p->cur.value);
+        advance(p);
+        if (!expect(p, TOK_RPAREN)) goto fail;
+        catch_block = parse_block(p);
+        if (!catch_block) goto fail;
+    }
+
+    if (cur_is(p, TOK_FINALLY)) {
+        advance(p); /* skip finally */
+        finally_block = parse_block(p);
+        if (!finally_block) goto fail;
+    }
+
+    if (!catch_block && !finally_block) {
+        set_error(p, "line %d: expected 'catch' or 'finally' after try block", p->cur.line);
+        goto fail;
+    }
+
+    Node *n = node_new(NODE_TRY, line);
+    n->try_.try_block = try_block;
+    n->try_.catch_ident = catch_ident;
+    n->try_.catch_block = catch_block;
+    n->try_.finally_block = finally_block;
+    return n;
+
+fail:
+    node_free(try_block);
+    free(catch_ident);
+    node_free(catch_block);
+    node_free(finally_block);
+    return NULL;
 }
 
 static Node *parse_import(Parser *p) {
@@ -524,6 +586,7 @@ static Node *parse_stmt(Parser *p) {
     switch (p->cur.type) {
         case TOK_LET:      return parse_let(p);
         case TOK_RETURN:   return parse_return(p);
+        case TOK_THROW:    return parse_throw(p);
         case TOK_BREAK:    return parse_break(p);
         case TOK_CONTINUE: return parse_continue(p);
         case TOK_PLUSPLUS:
@@ -560,6 +623,7 @@ static Node *parse_stmt(Parser *p) {
         }
         case TOK_WHILE:  return parse_while(p);
         case TOK_FOR:    return parse_for(p);
+        case TOK_TRY:    return parse_try(p);
         case TOK_IMPORT: return parse_import(p);
         case TOK_EXPORT: return parse_export(p);
         case TOK_FN: {

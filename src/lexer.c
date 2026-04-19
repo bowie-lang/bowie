@@ -115,6 +115,10 @@ static Token read_ident(Lexer *l) {
     else if (!strcmp(val, "continue")) type = TOK_CONTINUE;
     else if (!strcmp(val, "async"))    type = TOK_ASYNC;
     else if (!strcmp(val, "await"))    type = TOK_AWAIT;
+    else if (!strcmp(val, "try"))      type = TOK_TRY;
+    else if (!strcmp(val, "catch"))    type = TOK_CATCH;
+    else if (!strcmp(val, "finally"))  type = TOK_FINALLY;
+    else if (!strcmp(val, "throw"))    type = TOK_THROW;
 
     return (Token){ type, val, line };
 }
@@ -202,6 +206,10 @@ const char *tok_name(TokenType t) {
         case TOK_CONTINUE:    return "continue";
         case TOK_ASYNC:       return "async";
         case TOK_AWAIT:       return "await";
+        case TOK_TRY:         return "try";
+        case TOK_CATCH:       return "catch";
+        case TOK_FINALLY:     return "finally";
+        case TOK_THROW:       return "throw";
         case TOK_PLUSPLUS:    return "++";
         case TOK_MINUSMINUS:  return "--";
         case TOK_PLUS:      return "+";
