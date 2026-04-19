@@ -337,10 +337,9 @@ static Node *parse_expr(Parser *p, Prec prec) {
     while (!p->error && left) {
         Prec next = tok_prec(p->cur.type);
         if (next <= prec && !(cur_is(p, TOK_ASSIGN) && prec < PREC_ASSIGN)) break;
-
-        if (cur_is(p, TOK_LPAREN))    { left = parse_call(p, left);   continue; }
-        if (cur_is(p, TOK_LBRACKET))  { left = parse_index(p, left);  continue; }
-        if (cur_is(p, TOK_DOT))       { left = parse_dot(p, left);    continue; }
+        if (cur_is(p, TOK_LPAREN))   { left = parse_call(p, left);  continue; }
+        if (cur_is(p, TOK_LBRACKET)) { left = parse_index(p, left); continue; }
+        if (cur_is(p, TOK_DOT))      { left = parse_dot(p, left);   continue; }
         if (tok_prec(p->cur.type) <= prec) break;
         left = parse_infix(p, left);
     }
@@ -492,6 +491,25 @@ static Node *parse_continue(Parser *p) {
     return n;
 }
 
+static Node *make_incr(const char *name, const char *op, int line) {
+    Node *target = node_new(NODE_IDENT, line);
+    target->ident.name = strdup(name);
+    Node *dup = node_new(NODE_IDENT, line);
+    dup->ident.name = strdup(name);
+    Node *one = node_new(NODE_INT, line);
+    one->integer.value = 1;
+    Node *infix = node_new(NODE_INFIX, line);
+    infix->infix.op    = strdup(op);
+    infix->infix.left  = dup;
+    infix->infix.right = one;
+    Node *assign = node_new(NODE_ASSIGN, line);
+    assign->assign.target = target;
+    assign->assign.value  = infix;
+    Node *stmt = node_new(NODE_EXPR_STMT, line);
+    stmt->expr_stmt.expr = assign;
+    return stmt;
+}
+
 static Node *parse_stmt(Parser *p) {
     if (p->error) return NULL;
     switch (p->cur.type) {
@@ -499,6 +517,21 @@ static Node *parse_stmt(Parser *p) {
         case TOK_RETURN:   return parse_return(p);
         case TOK_BREAK:    return parse_break(p);
         case TOK_CONTINUE: return parse_continue(p);
+        case TOK_PLUSPLUS:
+        case TOK_MINUSMINUS: {
+            int line = p->cur.line;
+            const char *op = cur_is(p, TOK_PLUSPLUS) ? "+" : "-";
+            advance(p);
+            if (!cur_is(p, TOK_IDENT)) {
+                set_error(p, "line %d: '++' / '--' requires a variable", line);
+                return NULL;
+            }
+            char *name = p->cur.value;
+            Node *n = make_incr(name, op, line);
+            advance(p);
+            if (cur_is(p, TOK_SEMICOLON)) advance(p);
+            return n;
+        }
         case TOK_WHILE:  return parse_while(p);
         case TOK_FOR:    return parse_for(p);
         case TOK_IMPORT: return parse_import(p);
@@ -518,6 +551,17 @@ static Node *parse_stmt(Parser *p) {
             int  line = p->cur.line;
             Node *expr= parse_expr(p, PREC_NONE);
             if (!expr) return NULL;
+            /* postfix i++ / i-- */
+            if ((cur_is(p, TOK_PLUSPLUS) || cur_is(p, TOK_MINUSMINUS)) &&
+                expr->type == NODE_IDENT) {
+                const char *op = cur_is(p, TOK_PLUSPLUS) ? "+" : "-";
+                char *name = expr->ident.name;
+                Node *n = make_incr(name, op, line);
+                node_free(expr);
+                advance(p);
+                if (cur_is(p, TOK_SEMICOLON)) advance(p);
+                return n;
+            }
             if (cur_is(p, TOK_SEMICOLON)) advance(p);
             Node *n    = node_new(NODE_EXPR_STMT, line);
             n->expr_stmt.expr = expr;

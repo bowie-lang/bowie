@@ -30,6 +30,10 @@ typedef enum {
     TOK_BREAK,
     TOK_CONTINUE,
 
+    /* Compound operators */
+    TOK_PLUSPLUS,
+    TOK_MINUSMINUS,
+
     /* Arithmetic */
     TOK_PLUS,
     TOK_MINUS,

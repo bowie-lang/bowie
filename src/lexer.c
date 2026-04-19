@@ -129,8 +129,12 @@ Token lexer_next(Lexer *l) {
 
     adv(l);
     switch (c) {
-        case '+': return mktok(TOK_PLUS,     "+", line);
-        case '-': return mktok(TOK_MINUS,    "-", line);
+        case '+':
+            if (peek(l) == '+') { adv(l); return mktok(TOK_PLUSPLUS,   "++", line); }
+            return mktok(TOK_PLUS,  "+", line);
+        case '-':
+            if (peek(l) == '-') { adv(l); return mktok(TOK_MINUSMINUS, "--", line); }
+            return mktok(TOK_MINUS, "-", line);
         case '*': return mktok(TOK_STAR,     "*", line);
         case '/': return mktok(TOK_SLASH,    "/", line);
         case '%': return mktok(TOK_PERCENT,  "%", line);
@@ -192,8 +196,10 @@ const char *tok_name(TokenType t) {
         case TOK_EXPORT:    return "export";
         case TOK_AS:        return "as";
         case TOK_USE:       return "use";
-        case TOK_BREAK:     return "break";
-        case TOK_CONTINUE:  return "continue";
+        case TOK_BREAK:       return "break";
+        case TOK_CONTINUE:    return "continue";
+        case TOK_PLUSPLUS:    return "++";
+        case TOK_MINUSMINUS:  return "--";
         case TOK_PLUS:      return "+";
         case TOK_MINUS:     return "-";
         case TOK_STAR:      return "*";
