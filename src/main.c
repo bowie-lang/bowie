@@ -1,0 +1,161 @@
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "lexer.h"
+#include "parser.h"
+#include "interpreter.h"
+#include "builtins.h"
+
+/* Declared in builtins.c */
+void builtins_set_interp(Interpreter *it, Env *env);
+
+/* stdin is not seekable; avoid fseek/ftell (can hang or mis-size). */
+static char *read_stdin_all(void) {
+    size_t cap = 4096, len = 0;
+    char  *buf = malloc(cap);
+    if (!buf) return NULL;
+    for (;;) {
+        if (len + 1 >= cap) {
+            cap *= 2;
+            char *nb = realloc(buf, cap);
+            if (!nb) {
+                free(buf);
+                return NULL;
+            }
+            buf = nb;
+        }
+        size_t n = fread(buf + len, 1, cap - 1 - len, stdin);
+        len += n;
+        buf[len] = '\0';
+        if (n == 0) {
+            if (ferror(stdin)) {
+                fprintf(stderr, "bowie: error reading stdin: %s\n", strerror(errno));
+                free(buf);
+                return NULL;
+            }
+            break;
+        }
+    }
+    return buf;
+}
+
+static char *read_file(const char *path) {
+    if (!strcmp(path, "/dev/stdin") || !strcmp(path, "-"))
+        return read_stdin_all();
+
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "bowie: cannot open '%s': %s\n", path, strerror(errno));
+        return NULL;
+    }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *buf = malloc(sz + 1);
+    fread(buf, 1, sz, f);
+    buf[sz] = '\0';
+    fclose(f);
+    return buf;
+}
+
+static void run_source(const char *source, const char *filename) {
+    Lexer  *lexer  = lexer_new(source);
+    Parser *parser = parser_new(lexer);
+    Node   *ast    = parser_parse(parser);
+
+    if (parser->error) {
+        fprintf(stderr, "Parse error in %s:\n  %s\n", filename, parser->error);
+        node_free(ast);
+        parser_free(parser);
+        lexer_free(lexer);
+        exit(1);
+    }
+
+    Interpreter *interp  = interp_new();
+    interp->current_file = (char *)filename;
+    builtins_set_interp(interp, interp->globals);
+
+    Object *result = interp_eval(interp, ast, interp->globals);
+
+    if (result && result->type == OBJ_ERROR) {
+        fprintf(stderr, "Runtime error in %s:\n  %s\n", filename, result->error.msg);
+        obj_release(result);
+        interp_free(interp);
+        node_free(ast);
+        parser_free(parser);
+        lexer_free(lexer);
+        exit(1);
+    }
+
+    obj_release(result);
+    interp_free(interp);
+    node_free(ast);
+    parser_free(parser);
+    lexer_free(lexer);
+}
+
+static void repl(void) {
+    printf("Bowie REPL (type 'exit()' to quit)\n");
+
+    Interpreter *interp = interp_new();
+    builtins_set_interp(interp, interp->globals);
+
+    char line[4096];
+    for (;;) {
+        printf(">> ");
+        fflush(stdout);
+        if (!fgets(line, sizeof(line), stdin)) break;
+
+        int len = strlen(line);
+        if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+        if (!line[0]) continue;
+
+        Lexer  *lexer  = lexer_new(line);
+        Parser *parser = parser_new(lexer);
+        Node   *ast    = parser_parse(parser);
+
+        if (parser->error) {
+            fprintf(stderr, "Parse error: %s\n", parser->error);
+        } else {
+            Object *result = interp_eval(interp, ast, interp->globals);
+            if (result) {
+                if (result->type == OBJ_ERROR) {
+                    fprintf(stderr, "Error: %s\n", result->error.msg);
+                } else if (result->type != OBJ_NULL) {
+                    char *s = obj_inspect(result);
+                    printf("%s\n", s);
+                    free(s);
+                }
+                obj_release(result);
+            }
+        }
+
+        node_free(ast);
+        parser_free(parser);
+        lexer_free(lexer);
+    }
+
+    interp_free(interp);
+    printf("\nBye!\n");
+}
+
+int main(int argc, char *argv[]) {
+    if (argc == 1) {
+        repl();
+        return 0;
+    }
+
+    if (argc == 2) {
+        const char *path = argv[1];
+        char *src = read_file(path);
+        if (!src) return 1;
+        run_source(src, path);
+        free(src);
+        return 0;
+    }
+
+    fprintf(stderr, "Usage: bowie [script.bow]\n");
+    return 1;
+}
