@@ -9,30 +9,64 @@
 #include <math.h>
 #include <errno.h>
 
+static char *dup_cstr(const char *s) {
+    size_t len = strlen(s) + 1;
+    char *copy = malloc(len);
+    if (!copy) return NULL;
+    memcpy(copy, s, len);
+    return copy;
+}
+
 #ifdef _WIN32
   #include <windows.h>
   static char *resolve_path(const char *base_file, const char *rel) {
       char buf[4096];
-      if (rel[0] == '/' || rel[1] == ':') { strncpy(buf, rel, sizeof(buf)); return strdup(buf); }
-      char dir[4096]; strncpy(dir, base_file, sizeof(dir));
+      if (rel[0] == '/' || rel[1] == ':') { strncpy(buf, rel, sizeof(buf) - 1); buf[sizeof(buf) - 1] = '\0'; return dup_cstr(buf); }
+      char dir[4096]; strncpy(dir, base_file, sizeof(dir) - 1); dir[sizeof(dir) - 1] = '\0';
       char *slash = strrchr(dir, '\\');
       if (!slash) slash = strrchr(dir, '/');
       if (slash) { *(slash+1) = '\0'; snprintf(buf, sizeof(buf), "%s%s", dir, rel); }
-      else strncpy(buf, rel, sizeof(buf));
-      return strdup(buf);
+      else { strncpy(buf, rel, sizeof(buf) - 1); buf[sizeof(buf) - 1] = '\0'; }
+      return dup_cstr(buf);
   }
 #else
-  #include <limits.h>
   static char *resolve_path(const char *base_file, const char *rel) {
-      if (!base_file || rel[0] == '/') return realpath(rel, NULL) ?: strdup(rel);
-      char dir[PATH_MAX];
-      strncpy(dir, base_file, sizeof(dir) - 1);
-      char *slash = strrchr(dir, '/');
-      if (slash) *(slash + 1) = '\0'; else { dir[0] = '.'; dir[1] = '/'; dir[2] = '\0'; }
-      char joined[PATH_MAX];
-      snprintf(joined, sizeof(joined), "%s%s", dir, rel);
+      if (!base_file || rel[0] == '/') {
+          char *real = realpath(rel, NULL);
+          return real ? real : dup_cstr(rel);
+      }
+
+      char *base_copy = dup_cstr(base_file);
+      if (!base_copy) return NULL;
+
+      char *slash = strrchr(base_copy, '/');
+      const char *dir = ".";
+      if (slash) {
+          *(slash + 1) = '\0';
+          dir = base_copy;
+      }
+
+      size_t dir_len = strlen(dir);
+      size_t rel_len = strlen(rel);
+      int needs_sep = (dir_len > 0 && dir[dir_len - 1] != '/');
+      size_t joined_len = dir_len + (size_t)needs_sep + rel_len + 1;
+      char *joined = malloc(joined_len);
+      if (!joined) {
+          free(base_copy);
+          return NULL;
+      }
+
+      if (needs_sep) snprintf(joined, joined_len, "%s/%s", dir, rel);
+      else snprintf(joined, joined_len, "%s%s", dir, rel);
+
+      free(base_copy);
+
       char *real = realpath(joined, NULL);
-      return real ? real : strdup(joined);
+      if (real) {
+          free(joined);
+          return real;
+      }
+      return joined;
   }
 #endif
 
@@ -40,7 +74,10 @@ static char *read_file_str(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
     fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
-    char *buf = malloc(sz + 1); fread(buf, 1, sz, f); buf[sz] = '\0';
+    char *buf = malloc(sz + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t read = fread(buf, 1, sz, f);
+    buf[read] = '\0';
     fclose(f); return buf;
 }
 
@@ -465,7 +502,7 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
         case NODE_FUNCTION: {
             char **params = malloc(n->fn.param_count * sizeof(char *));
             for (int i = 0; i < n->fn.param_count; i++)
-                params[i] = strdup(n->fn.params[i]);
+                params[i] = dup_cstr(n->fn.params[i]);
             Object *fn = obj_function(params, n->fn.param_count, n->fn.body, env, n->fn.name);
             return fn;
         }
@@ -594,7 +631,7 @@ Object *interp_load_module(Interpreter *it, const char *path) {
     free(src);
 
     if (parser->error) {
-        char *msg = strdup(parser->error);
+        char *msg = dup_cstr(parser->error);
         node_free(ast); parser_free(parser); lexer_free(lexer);
         Object *err = obj_errorf("import '%s': %s", path, msg);
         free(msg);
@@ -628,7 +665,7 @@ Object *interp_load_module(Interpreter *it, const char *path) {
 
     /* Cache it */
     ModCache *entry = malloc(sizeof(ModCache));
-    entry->path     = strdup(path);
+    entry->path     = dup_cstr(path);
     entry->module   = mod;
     entry->ast      = ast;  /* owns the ast */
     obj_retain(mod);
