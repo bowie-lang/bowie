@@ -120,14 +120,28 @@ Object *obj_return(Object *val) {
 Object *obj_break(void)    { return BOWIE_BREAK; }
 Object *obj_continue(void) { return BOWIE_CONTINUE; }
 
-Object *obj_errorf(const char *fmt, ...) {
+static Object *obj_error_vtypef(const char *type, const char *fmt, va_list ap) {
     char buf[512];
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    Object *o     = obj_new(OBJ_ERROR);
+    o->error.type = strdup(type ? type : "RuntimeError");
+    o->error.msg  = strdup(buf);
+    return o;
+}
+
+Object *obj_errorf(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+    Object *o = obj_error_vtypef("RuntimeError", fmt, ap);
     va_end(ap);
-    Object *o     = obj_new(OBJ_ERROR);
-    o->error.msg  = strdup(buf);
+    return o;
+}
+
+Object *obj_error_typef(const char *type, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    Object *o = obj_error_vtypef(type, fmt, ap);
+    va_end(ap);
     return o;
 }
 
@@ -186,6 +200,7 @@ void obj_release(Object *o) {
             obj_release(o->ret.value);
             break;
         case OBJ_ERROR:
+            free(o->error.type);
             free(o->error.msg);
             break;
         case OBJ_HTTP_SERVER: {
@@ -364,7 +379,9 @@ char *obj_inspect(Object *o) {
             return strdup(buf);
         }
         case OBJ_ERROR:
-            snprintf(buf, sizeof(buf), "Error: %s", o->error.msg);
+            snprintf(buf, sizeof(buf), "%s: %s",
+                     o->error.type ? o->error.type : "RuntimeError",
+                     o->error.msg);
             return strdup(buf);
         case OBJ_HTTP_SERVER:
             snprintf(buf, sizeof(buf), "<server port=%d>", o->server.port);

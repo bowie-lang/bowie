@@ -97,6 +97,7 @@ static Token read_ident(Lexer *l) {
 
     TokenType type = TOK_IDENT;
     if      (!strcmp(val, "let"))    type = TOK_LET;
+    else if (!strcmp(val, "const"))  type = TOK_CONST;
     else if (!strcmp(val, "fn"))     type = TOK_FN;
     else if (!strcmp(val, "return")) type = TOK_RETURN;
     else if (!strcmp(val, "if"))     type = TOK_IF;
@@ -188,6 +189,7 @@ const char *tok_name(TokenType t) {
         case TOK_FLOAT:     return "FLOAT";
         case TOK_STRING:    return "STRING";
         case TOK_LET:       return "let";
+        case TOK_CONST:     return "const";
         case TOK_FN:        return "fn";
         case TOK_RETURN:    return "return";
         case TOK_IF:        return "if";

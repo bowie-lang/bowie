@@ -44,13 +44,14 @@ Object *env_get(Env *e, const char *key) {
     return e->outer ? env_get(e->outer, key) : NULL;
 }
 
-void env_set(Env *e, const char *key, Object *val) {
+void env_define(Env *e, const char *key, Object *val, int is_const) {
     unsigned int idx = env_hash(key);
     EnvEntry *en = e->entries[idx];
     while (en) {
         if (!strcmp(en->key, key)) {
             obj_release(en->value);
             en->value = val;
+            en->is_const = is_const;
             obj_retain(val);
             return;
         }
@@ -59,23 +60,29 @@ void env_set(Env *e, const char *key, Object *val) {
     en        = malloc(sizeof(EnvEntry));
     en->key   = strdup(key);
     en->value = val;
+    en->is_const = is_const;
     obj_retain(val);
     en->next  = e->entries[idx];
     e->entries[idx] = en;
 }
 
+void env_set(Env *e, const char *key, Object *val) {
+    env_define(e, key, val, 0);
+}
+
 /* Walk up the scope chain to find and update an existing binding */
-int env_assign(Env *e, const char *key, Object *val) {
+EnvAssignResult env_assign(Env *e, const char *key, Object *val) {
     unsigned int idx = env_hash(key);
     EnvEntry *en = e->entries[idx];
     while (en) {
         if (!strcmp(en->key, key)) {
+            if (en->is_const) return ENV_ASSIGN_CONST;
             obj_release(en->value);
             en->value = val;
             obj_retain(val);
-            return 1;
+            return ENV_ASSIGN_OK;
         }
         en = en->next;
     }
-    return e->outer ? env_assign(e->outer, key, val) : 0;
+    return e->outer ? env_assign(e->outer, key, val) : ENV_ASSIGN_UNDEFINED;
 }

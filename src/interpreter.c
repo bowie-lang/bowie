@@ -93,17 +93,30 @@ static char *read_file_str(const char *path) {
 
 static Object *eval_node(Interpreter *it, Node *n, Env *env);
 
+static Object *error_value_from_object(Object *err) {
+    Object *payload = obj_hash();
+    if (err && err->type == OBJ_ERROR) {
+        Object *type = obj_string(err->error.type ? err->error.type : "RuntimeError");
+        Object *msg  = obj_string(err->error.msg ? err->error.msg : "");
+        hash_set(payload, "type", type);
+        hash_set(payload, "message", msg);
+        obj_release(type);
+        obj_release(msg);
+    }
+    return payload;
+}
+
 /* ---- Arithmetic helpers ---- */
 static Object *eval_int_infix(const char *op, long long a, long long b, int line) {
     if (!strcmp(op, "+"))  return obj_int(a + b);
     if (!strcmp(op, "-"))  return obj_int(a - b);
     if (!strcmp(op, "*"))  return obj_int(a * b);
     if (!strcmp(op, "/")) {
-        if (b == 0) return obj_errorf("line %d: division by zero", line);
+        if (b == 0) return obj_error_typef("ZeroDivisionError", "line %d: division by zero", line);
         return obj_int(a / b);
     }
     if (!strcmp(op, "%")) {
-        if (b == 0) return obj_errorf("line %d: modulo by zero", line);
+        if (b == 0) return obj_error_typef("ZeroDivisionError", "line %d: modulo by zero", line);
         return obj_int(a % b);
     }
     if (!strcmp(op, "==")) return obj_bool(a == b);
@@ -112,7 +125,7 @@ static Object *eval_int_infix(const char *op, long long a, long long b, int line
     if (!strcmp(op, "<=")) return obj_bool(a <= b);
     if (!strcmp(op, ">"))  return obj_bool(a > b);
     if (!strcmp(op, ">=")) return obj_bool(a >= b);
-    return obj_errorf("line %d: unknown operator '%s' for int", line, op);
+    return obj_error_typef("OperatorError", "line %d: unknown operator '%s' for int", line, op);
 }
 
 static Object *eval_float_infix(const char *op, double a, double b, int line) {
@@ -120,7 +133,7 @@ static Object *eval_float_infix(const char *op, double a, double b, int line) {
     if (!strcmp(op, "-"))  return obj_float(a - b);
     if (!strcmp(op, "*"))  return obj_float(a * b);
     if (!strcmp(op, "/")) {
-        if (b == 0.0) return obj_errorf("line %d: division by zero", line);
+        if (b == 0.0) return obj_error_typef("ZeroDivisionError", "line %d: division by zero", line);
         return obj_float(a / b);
     }
     if (!strcmp(op, "%"))  return obj_float(fmod(a, b));
@@ -130,7 +143,7 @@ static Object *eval_float_infix(const char *op, double a, double b, int line) {
     if (!strcmp(op, "<=")) return obj_bool(a <= b);
     if (!strcmp(op, ">"))  return obj_bool(a > b);
     if (!strcmp(op, ">=")) return obj_bool(a >= b);
-    return obj_errorf("line %d: unknown operator '%s' for float", line, op);
+    return obj_error_typef("OperatorError", "line %d: unknown operator '%s' for float", line, op);
 }
 
 static Object *eval_string_infix(const char *op, const char *a, const char *b, int line) {
@@ -147,7 +160,7 @@ static Object *eval_string_infix(const char *op, const char *a, const char *b, i
     if (!strcmp(op, "!=")) return obj_bool(strcmp(a, b) != 0);
     if (!strcmp(op, "<"))  return obj_bool(strcmp(a, b) < 0);
     if (!strcmp(op, ">"))  return obj_bool(strcmp(a, b) > 0);
-    return obj_errorf("line %d: operator '%s' not supported for strings", line, op);
+    return obj_error_typef("OperatorError", "line %d: operator '%s' not supported for strings", line, op);
 }
 
 /* ---- Eval helpers ---- */
@@ -204,8 +217,9 @@ static Object *eval_infix(Interpreter *it, Node *n, Env *env) {
     } else if (!strcmp(op, "!=")) {
         res = obj_bool(!obj_equals(left, right));
     } else {
-        res = obj_errorf("line %d: type mismatch: %s %s %s",
-                         n->line, obj_type_name(left->type), op, obj_type_name(right->type));
+        res = obj_error_typef("TypeMismatchError",
+                              "line %d: type mismatch: %s %s %s",
+                              n->line, obj_type_name(left->type), op, obj_type_name(right->type));
     }
 
     obj_release(left);
@@ -222,10 +236,11 @@ static Object *eval_prefix(Interpreter *it, Node *n, Env *env) {
     } else if (!strcmp(n->prefix.op, "-")) {
         if (right->type == OBJ_INT)   res = obj_int(-(right->int_val));
         else if (right->type == OBJ_FLOAT) res = obj_float(-(right->float_val));
-        else res = obj_errorf("line %d: '-' prefix not supported for %s",
-                              n->line, obj_type_name(right->type));
+        else res = obj_error_typef("OperatorError",
+                                   "line %d: '-' prefix not supported for %s",
+                                   n->line, obj_type_name(right->type));
     } else {
-        res = obj_errorf("line %d: unknown prefix '%s'", n->line, n->prefix.op);
+        res = obj_error_typef("OperatorError", "line %d: unknown prefix '%s'", n->line, n->prefix.op);
     }
     obj_release(right);
     return res;
@@ -264,10 +279,11 @@ static Object *eval_call(Interpreter *it, Node *n, Env *env) {
         result = fn->builtin.fn(&args);
     } else if (fn->type == OBJ_FUNCTION) {
         if (args.count != fn->fn.param_count) {
-            result = obj_errorf("line %d: %s expects %d args, got %d",
-                                n->line,
-                                fn->fn.name ? fn->fn.name : "fn",
-                                fn->fn.param_count, args.count);
+            result = obj_error_typef("ArityError",
+                                     "line %d: %s expects %d args, got %d",
+                                     n->line,
+                                     fn->fn.name ? fn->fn.name : "fn",
+                                     fn->fn.param_count, args.count);
 #ifndef _WIN32
         } else if (fn->fn.is_async && g_event_loop) {
             Object *promise = obj_promise();
@@ -293,7 +309,9 @@ static Object *eval_call(Interpreter *it, Node *n, Env *env) {
             env_release(fn_env);
         }
     } else {
-        result = obj_errorf("line %d: not a function: %s", n->line, obj_type_name(fn->type));
+        result = obj_error_typef("TypeMismatchError",
+                                 "line %d: not a function: %s",
+                                 n->line, obj_type_name(fn->type));
     }
 
     for (int i = 0; i < args.count; i++) obj_release(args.items[i]);
@@ -311,7 +329,7 @@ static Object *eval_index(Interpreter *it, Node *n, Env *env) {
     Object *res = NULL;
     if (left->type == OBJ_ARRAY) {
         if (index->type != OBJ_INT) {
-            res = obj_errorf("line %d: array index must be int", n->line);
+            res = obj_error_typef("TypeMismatchError", "line %d: array index must be int", n->line);
         } else {
             res = array_get(left, (int)index->int_val);
             obj_retain(res);
@@ -323,7 +341,7 @@ static Object *eval_index(Interpreter *it, Node *n, Env *env) {
         free(key);
     } else if (left->type == OBJ_STRING) {
         if (index->type != OBJ_INT) {
-            res = obj_errorf("line %d: string index must be int", n->line);
+            res = obj_error_typef("TypeMismatchError", "line %d: string index must be int", n->line);
         } else {
             int idx = (int)index->int_val;
             int len = strlen(left->string.str);
@@ -336,8 +354,9 @@ static Object *eval_index(Interpreter *it, Node *n, Env *env) {
             }
         }
     } else {
-        res = obj_errorf("line %d: index operator not supported for %s",
-                         n->line, obj_type_name(left->type));
+        res = obj_error_typef("TypeMismatchError",
+                              "line %d: index operator not supported for %s",
+                              n->line, obj_type_name(left->type));
     }
 
     obj_release(left);
@@ -351,9 +370,18 @@ static Object *eval_assign(Interpreter *it, Node *n, Env *env) {
 
     Node *target = n->assign.target;
     if (target->type == NODE_IDENT) {
-        if (!env_assign(env, target->ident.name, val)) {
+        EnvAssignResult assign_result = env_assign(env, target->ident.name, val);
+        if (assign_result == ENV_ASSIGN_UNDEFINED) {
             obj_release(val);
-            return obj_errorf("line %d: undefined variable '%s'", n->line, target->ident.name);
+            return obj_error_typef("UndefinedVariableError",
+                                   "line %d: undefined variable '%s'",
+                                   n->line, target->ident.name);
+        }
+        if (assign_result == ENV_ASSIGN_CONST) {
+            obj_release(val);
+            return obj_error_typef("ConstAssignmentError",
+                                   "line %d: cannot assign to const '%s'",
+                                   n->line, target->ident.name);
         }
         return val;
     }
@@ -366,13 +394,13 @@ static Object *eval_assign(Interpreter *it, Node *n, Env *env) {
         if (container->type == OBJ_ARRAY) {
             if (key_obj->type != OBJ_INT) {
                 obj_release(container); obj_release(key_obj); obj_release(val);
-                return obj_errorf("line %d: array index must be int", n->line);
+                return obj_error_typef("TypeMismatchError", "line %d: array index must be int", n->line);
             }
             int idx = (int)key_obj->int_val;
             if (idx < 0) idx += container->array.elems.count;
             if (idx < 0 || idx >= container->array.elems.count) {
                 obj_release(container); obj_release(key_obj); obj_release(val);
-                return obj_errorf("line %d: index out of bounds", n->line);
+                return obj_error_typef("IndexError", "line %d: index out of bounds", n->line);
             }
             obj_release(container->array.elems.items[idx]);
             container->array.elems.items[idx] = val;
@@ -383,15 +411,16 @@ static Object *eval_assign(Interpreter *it, Node *n, Env *env) {
             free(key);
         } else {
             obj_release(container); obj_release(key_obj); obj_release(val);
-            return obj_errorf("line %d: cannot index-assign into %s",
-                              n->line, obj_type_name(container->type));
+            return obj_error_typef("TypeMismatchError",
+                                   "line %d: cannot index-assign into %s",
+                                   n->line, obj_type_name(container->type));
         }
         obj_release(container);
         obj_release(key_obj);
         return val;
     }
     obj_release(val);
-    return obj_errorf("line %d: invalid assignment target", n->line);
+    return obj_error_typef("AssignmentTargetError", "line %d: invalid assignment target", n->line);
 }
 
 /* ---- Main eval ---- */
@@ -409,7 +438,9 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
         /* --- Identifier --- */
         case NODE_IDENT: {
             Object *v = env_get(env, n->ident.name);
-            if (!v) return obj_errorf("line %d: undefined variable '%s'", n->line, n->ident.name);
+            if (!v) return obj_error_typef("UndefinedVariableError",
+                                           "line %d: undefined variable '%s'",
+                                           n->line, n->ident.name);
             obj_retain(v);
             return v;
         }
@@ -485,7 +516,9 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
             if (IS_ERR(result) && n->try_.catch_block) {
                 Env *catch_env = env_new(env);
                 if (n->try_.catch_ident) {
-                    env_set(catch_env, n->try_.catch_ident, result);
+                    Object *catch_value = error_value_from_object(result);
+                    env_set(catch_env, n->try_.catch_ident, catch_value);
+                    obj_release(catch_value);
                 }
                 Object *caught = eval_block(it, n->try_.catch_block, catch_env);
                 env_release(catch_env);
@@ -533,7 +566,9 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
             if (IS_ERR(iter)) return iter;
             if (iter->type != OBJ_ARRAY) {
                 obj_release(iter);
-                return obj_errorf("line %d: for..in requires an array", n->line);
+                return obj_error_typef("TypeMismatchError",
+                                       "line %d: for..in requires an array",
+                                       n->line);
             }
             Object *result = obj_null();
             for (int i = 0; i < iter->array.elems.count; i++) {
@@ -567,7 +602,7 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
         case NODE_LET: {
             Object *val = eval_node(it, n->let.value, env);
             if (IS_ERR(val)) return val;
-            env_set(env, n->let.name, val);
+            env_define(env, n->let.name, val, n->let.is_const);
             obj_release(val);
             return obj_null();
         }
@@ -593,7 +628,7 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
                 Object *err = val->promise.value;
                 if (err) { obj_retain(err); obj_release(val); return err; }
                 obj_release(val);
-                return obj_errorf("promise rejected");
+                return obj_error_typef("PromiseError", "promise rejected");
             }
 
             /* PENDING */
@@ -619,7 +654,7 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
             }
 #endif
             obj_release(val);
-            return obj_errorf("await: promise never resolved");
+            return obj_error_typef("PromiseError", "await: promise never resolved");
         }
 
         /* --- Return --- */
@@ -636,7 +671,7 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
             Object *val = eval_node(it, n->throw_.value, env);
             if (IS_ERR(val)) return val;
             char *msg = obj_inspect(val);
-            Object *err = obj_errorf("%s", msg ? msg : "throw");
+            Object *err = obj_error_typef("ThrownError", "%s", msg ? msg : "throw");
             free(msg);
             obj_release(val);
             return err;
@@ -702,8 +737,9 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
                     Object *v = hash_get(mod, n->import_.names[i]);
                     if (v == BOWIE_NULL) {
                         obj_release(mod);
-                        return obj_errorf("line %d: '%s' not exported by '%s'",
-                                          n->line, n->import_.names[i], n->import_.path);
+                        return obj_error_typef("ImportError",
+                                               "line %d: '%s' not exported by '%s'",
+                                               n->line, n->import_.names[i], n->import_.path);
                     }
                     env_set(env, n->import_.names[i], v);
                 }
@@ -722,7 +758,7 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
         }
 
         default:
-            return obj_errorf("eval: unknown node type %d", n->type);
+            return obj_error_typef("InternalError", "eval: unknown node type %d", n->type);
     }
 }
 
@@ -732,11 +768,11 @@ Object *interp_call_fn(Interpreter *it, Object *fn, ObjList *args) {
     if (fn->type == OBJ_BUILTIN)
         return fn->builtin.fn(args);
     if (fn->type != OBJ_FUNCTION)
-        return obj_errorf("not a function: %s", obj_type_name(fn->type));
+        return obj_error_typef("TypeMismatchError", "not a function: %s", obj_type_name(fn->type));
     if (args->count != fn->fn.param_count)
-        return obj_errorf("%s expects %d args, got %d",
-                          fn->fn.name ? fn->fn.name : "fn",
-                          fn->fn.param_count, args->count);
+        return obj_error_typef("ArityError", "%s expects %d args, got %d",
+                               fn->fn.name ? fn->fn.name : "fn",
+                               fn->fn.param_count, args->count);
     Env *fn_env = env_new(fn->fn.closure);
     for (int i = 0; i < fn->fn.param_count; i++)
         env_set(fn_env, fn->fn.params[i], args->items[i]);
@@ -762,7 +798,7 @@ Object *interp_load_module(Interpreter *it, const char *path) {
     }
 
     char *src = read_file_str(path);
-    if (!src) return obj_errorf("import: cannot open '%s': %s", path, strerror(errno));
+    if (!src) return obj_error_typef("ImportError", "import: cannot open '%s': %s", path, strerror(errno));
 
     Lexer  *lexer  = lexer_new(src);
     Parser *parser = parser_new(lexer);
@@ -772,7 +808,7 @@ Object *interp_load_module(Interpreter *it, const char *path) {
     if (parser->error) {
         char *msg = dup_cstr(parser->error);
         node_free(ast); parser_free(parser); lexer_free(lexer);
-        Object *err = obj_errorf("import '%s': %s", path, msg);
+        Object *err = obj_error_typef("ImportError", "import '%s': %s", path, msg);
         free(msg);
         return err;
     }

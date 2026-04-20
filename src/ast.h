@@ -58,7 +58,7 @@ struct Node {
         struct { NodeList stmts; } block;
 
         /* NODE_LET */
-        struct { char *name; Node *value; } let;
+        struct { char *name; Node *value; int is_const; } let;
 
         /* NODE_RETURN */
         struct { Node *value; } ret;

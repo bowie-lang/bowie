@@ -119,7 +119,10 @@ static void run_source(const char *source, const char *filename) {
     Object *result = interp_eval(interp, ast, interp->globals);
 
     if (result && result->type == OBJ_ERROR) {
-        fprintf(stderr, "Runtime error in %s:\n  %s\n", filename, result->error.msg);
+        fprintf(stderr, "Runtime error in %s:\n  %s: %s\n",
+                filename,
+                result->error.type ? result->error.type : "RuntimeError",
+                result->error.msg);
         obj_release(result);
         interp_free(interp);
         node_free(ast);
@@ -167,7 +170,9 @@ static void repl(void) {
             Object *result = interp_eval(interp, ast, interp->globals);
             if (result) {
                 if (result->type == OBJ_ERROR) {
-                    fprintf(stderr, "Error: %s\n", result->error.msg);
+                    fprintf(stderr, "Error (%s): %s\n",
+                            result->error.type ? result->error.type : "RuntimeError",
+                            result->error.msg);
                 } else if (result->type != OBJ_NULL) {
                     char *s = obj_inspect(result);
                     printf("%s\n", s);

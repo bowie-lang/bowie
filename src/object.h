@@ -72,7 +72,7 @@ struct Object {
         } fn;
         struct { BuiltinFn fn; const char *name; }             builtin;
         struct { Object *value; }                               ret;
-        struct { char *msg; }                                   error;
+        struct { char *type; char *msg; }                       error;
         struct { int port; int fd; Route *routes; Object *listen_cb; } server;
         struct { void *conn; /* PGconn * when libpq is linked */ } pg;
         struct {
@@ -100,6 +100,7 @@ Object *obj_return(Object *val);
 Object *obj_break(void);
 Object *obj_continue(void);
 Object *obj_errorf(const char *fmt, ...);
+Object *obj_error_typef(const char *type, const char *fmt, ...);
 Object *obj_http_server(int port, Object *listen_cb);
 Object *obj_pg_conn(void *pgconn);
 

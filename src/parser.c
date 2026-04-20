@@ -369,11 +369,12 @@ static Node *parse_block(Parser *p) {
     return b;
 }
 
-static Node *parse_let(Parser *p) {
+static Node *parse_let(Parser *p, int is_const) {
     int line = p->cur.line;
-    advance(p); /* skip let */
+    const char *kind = is_const ? "const" : "let";
+    advance(p); /* skip let/const */
     if (!cur_is(p, TOK_IDENT)) {
-        set_error(p, "line %d: expected identifier after 'let'", p->cur.line);
+        set_error(p, "line %d: expected identifier after '%s'", p->cur.line, kind);
         return NULL;
     }
     char *name = strdup(p->cur.value);
@@ -384,6 +385,7 @@ static Node *parse_let(Parser *p) {
     Node *n    = node_new(NODE_LET, line);
     n->let.name  = name;
     n->let.value = val;
+    n->let.is_const = is_const;
     /* optional semicolon */
     if (cur_is(p, TOK_SEMICOLON)) advance(p);
     return n;
@@ -584,7 +586,8 @@ static Node *make_incr(const char *name, const char *op, int line) {
 static Node *parse_stmt(Parser *p) {
     if (p->error) return NULL;
     switch (p->cur.type) {
-        case TOK_LET:      return parse_let(p);
+        case TOK_LET:      return parse_let(p, 0);
+        case TOK_CONST:    return parse_let(p, 1);
         case TOK_RETURN:   return parse_return(p);
         case TOK_THROW:    return parse_throw(p);
         case TOK_BREAK:    return parse_break(p);
@@ -619,6 +622,7 @@ static Node *parse_stmt(Parser *p) {
             Node *n    = node_new(NODE_LET, line);
             n->let.name  = name;
             n->let.value = fn;
+            n->let.is_const = 0;
             return n;
         }
         case TOK_WHILE:  return parse_while(p);
@@ -635,6 +639,7 @@ static Node *parse_stmt(Parser *p) {
             Node *n    = node_new(NODE_LET, line);
             n->let.name  = name;
             n->let.value = fn;
+            n->let.is_const = 0;
             return n;
         }
         default: {

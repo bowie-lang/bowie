@@ -17,7 +17,7 @@
 #define ARG(n)    (args->count > (n) ? args->items[n] : BOWIE_NULL)
 #define NARGS     (args->count)
 #define REQUIRE(n, name) \
-    if (NARGS < (n)) return obj_errorf(name "() requires %d argument(s)", n)
+    if (NARGS < (n)) return obj_error_typef("ArityError", name "() requires %d argument(s)", n)
 
 /* ---- I/O ---- */
 static Object *bw_print(ObjList *args) {
@@ -351,7 +351,7 @@ static Object *bw_printf(ObjList *args) {
     char *out = NULL;
     char err[256];
     if (bow_format_build(args, &out, err, sizeof err) != 0)
-        return obj_errorf("printf(): %s", err);
+        return obj_error_typef("FormatError", "printf(): %s", err);
     fputs(out, stdout);
     fflush(stdout);
     free(out);
@@ -362,7 +362,7 @@ static Object *bw_sprintf(ObjList *args) {
     char *out = NULL;
     char err[256];
     if (bow_format_build(args, &out, err, sizeof err) != 0)
-        return obj_errorf("sprintf(): %s", err);
+        return obj_error_typef("FormatError", "sprintf(): %s", err);
     Object *o = obj_string(out);
     free(out);
     return o;
@@ -387,10 +387,10 @@ static Object *bw_int(ObjList *args) {
         char *end;
         long long v = strtoll(a->string.str, &end, 10);
         if (end == a->string.str || (*end != '\0' && !isspace(*end)))
-            return obj_errorf("int(): cannot convert '%s'", a->string.str);
+            return obj_error_typef("ValueError", "int(): cannot convert '%s'", a->string.str);
         return obj_int(v);
     }
-    return obj_errorf("int(): cannot convert %s", obj_type_name(a->type));
+    return obj_error_typef("TypeMismatchError", "int(): cannot convert %s", obj_type_name(a->type));
 }
 
 static Object *bw_float(ObjList *args) {
@@ -402,10 +402,10 @@ static Object *bw_float(ObjList *args) {
         char *end;
         double v = strtod(a->string.str, &end);
         if (*end != '\0' && !isspace(*end))
-            return obj_errorf("float(): cannot convert '%s'", a->string.str);
+            return obj_error_typef("ValueError", "float(): cannot convert '%s'", a->string.str);
         return obj_float(v);
     }
-    return obj_errorf("float(): cannot convert %s", obj_type_name(a->type));
+    return obj_error_typef("TypeMismatchError", "float(): cannot convert %s", obj_type_name(a->type));
 }
 
 static Object *bw_bool(ObjList *args) {
@@ -418,6 +418,32 @@ static Object *bw_type(ObjList *args) {
     return obj_string(obj_type_name(ARG(0)->type));
 }
 
+static Object *bw_error_type(ObjList *args) {
+    REQUIRE(1, "error_type");
+    if (ARG(0)->type == OBJ_ERROR)
+        return obj_string(ARG(0)->error.type ? ARG(0)->error.type : "RuntimeError");
+    if (ARG(0)->type == OBJ_HASH) {
+        Object *type = hash_get(ARG(0), "type");
+        if (type != BOWIE_NULL && type->type == OBJ_STRING) return obj_string(type->string.str);
+    }
+    return obj_null();
+}
+
+static Object *bw_is_error_type(ObjList *args) {
+    REQUIRE(2, "is_error_type");
+    if (ARG(1)->type != OBJ_STRING)
+        return obj_error_typef("TypeMismatchError", "is_error_type(): second argument must be string");
+    const char *actual = NULL;
+    if (ARG(0)->type == OBJ_ERROR) {
+        actual = ARG(0)->error.type ? ARG(0)->error.type : "RuntimeError";
+    } else if (ARG(0)->type == OBJ_HASH) {
+        Object *type = hash_get(ARG(0), "type");
+        if (type != BOWIE_NULL && type->type == OBJ_STRING) actual = type->string.str;
+    }
+    if (!actual) return obj_bool(0);
+    return obj_bool(strcmp(actual, ARG(1)->string.str) == 0);
+}
+
 /* ---- Collections ---- */
 static Object *bw_len(ObjList *args) {
     REQUIRE(1, "len");
@@ -425,13 +451,13 @@ static Object *bw_len(ObjList *args) {
     if (a->type == OBJ_STRING)  return obj_int(strlen(a->string.str));
     if (a->type == OBJ_ARRAY)   return obj_int(a->array.elems.count);
     if (a->type == OBJ_HASH)    return obj_int(a->hash.size);
-    return obj_errorf("len(): not supported for %s", obj_type_name(a->type));
+    return obj_error_typef("TypeMismatchError", "len(): not supported for %s", obj_type_name(a->type));
 }
 
 static Object *bw_push(ObjList *args) {
     REQUIRE(2, "push");
     if (ARG(0)->type != OBJ_ARRAY)
-        return obj_errorf("push(): first argument must be array");
+        return obj_error_typef("TypeMismatchError", "push(): first argument must be array");
     array_push(ARG(0), ARG(1));
     return obj_null();
 }
@@ -439,7 +465,7 @@ static Object *bw_push(ObjList *args) {
 static Object *bw_pop(ObjList *args) {
     REQUIRE(1, "pop");
     if (ARG(0)->type != OBJ_ARRAY)
-        return obj_errorf("pop(): argument must be array");
+        return obj_error_typef("TypeMismatchError", "pop(): argument must be array");
     Object *arr = ARG(0);
     if (arr->array.elems.count == 0) return obj_null();
     int last = arr->array.elems.count - 1;
@@ -453,7 +479,7 @@ static Object *bw_pop(ObjList *args) {
 static Object *bw_keys(ObjList *args) {
     REQUIRE(1, "keys");
     if (ARG(0)->type != OBJ_HASH)
-        return obj_errorf("keys(): argument must be hash");
+        return obj_error_typef("TypeMismatchError", "keys(): argument must be hash");
     int n;
     char **ks = hash_keys(ARG(0), &n);
     Object *arr = obj_array();
@@ -469,7 +495,7 @@ static Object *bw_keys(ObjList *args) {
 static Object *bw_values(ObjList *args) {
     REQUIRE(1, "values");
     if (ARG(0)->type != OBJ_HASH)
-        return obj_errorf("values(): argument must be hash");
+        return obj_error_typef("TypeMismatchError", "values(): argument must be hash");
     Object *h   = ARG(0);
     Object *arr = obj_array();
     for (int i = 0; i < 64; i++) {
@@ -488,17 +514,17 @@ static Object *bw_range(ObjList *args) {
     REQUIRE(1, "range");
     long long start = 0, end_, step = 1;
     if (NARGS == 1) {
-        if (ARG(0)->type != OBJ_INT) return obj_errorf("range(): argument must be int");
+        if (ARG(0)->type != OBJ_INT) return obj_error_typef("TypeMismatchError", "range(): argument must be int");
         end_ = ARG(0)->int_val;
     } else {
         if (ARG(0)->type != OBJ_INT || ARG(1)->type != OBJ_INT)
-            return obj_errorf("range(): arguments must be int");
+            return obj_error_typef("TypeMismatchError", "range(): arguments must be int");
         start = ARG(0)->int_val;
         end_  = ARG(1)->int_val;
         if (NARGS >= 3) {
-            if (ARG(2)->type != OBJ_INT) return obj_errorf("range(): step must be int");
+            if (ARG(2)->type != OBJ_INT) return obj_error_typef("TypeMismatchError", "range(): step must be int");
             step = ARG(2)->int_val;
-            if (step == 0) return obj_errorf("range(): step cannot be 0");
+            if (step == 0) return obj_error_typef("ValueError", "range(): step cannot be 0");
         }
     }
     Object *arr = obj_array();
@@ -522,12 +548,12 @@ static Object *bw_slice(ObjList *args) {
     REQUIRE(2, "slice");
     Object *a = ARG(0);
     if (a->type != OBJ_ARRAY && a->type != OBJ_STRING)
-        return obj_errorf("slice(): first arg must be array or string");
-    if (ARG(1)->type != OBJ_INT) return obj_errorf("slice(): start must be int");
+        return obj_error_typef("TypeMismatchError", "slice(): first arg must be array or string");
+    if (ARG(1)->type != OBJ_INT) return obj_error_typef("TypeMismatchError", "slice(): start must be int");
     int start = (int)ARG(1)->int_val;
     int end_  = -1;
     if (NARGS >= 3) {
-        if (ARG(2)->type != OBJ_INT) return obj_errorf("slice(): end must be int");
+        if (ARG(2)->type != OBJ_INT) return obj_error_typef("TypeMismatchError", "slice(): end must be int");
         end_ = (int)ARG(2)->int_val;
     }
     if (a->type == OBJ_ARRAY) {
@@ -562,7 +588,7 @@ static Object *bw_slice(ObjList *args) {
 static Object *bw_split(ObjList *args) {
     REQUIRE(2, "split");
     if (ARG(0)->type != OBJ_STRING || ARG(1)->type != OBJ_STRING)
-        return obj_errorf("split(): requires two strings");
+        return obj_error_typef("TypeMismatchError", "split(): requires two strings");
     const char *src  = ARG(0)->string.str;
     const char *delim= ARG(1)->string.str;
     Object *arr = obj_array();
@@ -588,7 +614,7 @@ static Object *bw_split(ObjList *args) {
 static Object *bw_join(ObjList *args) {
     REQUIRE(2, "join");
     if (ARG(0)->type != OBJ_ARRAY || ARG(1)->type != OBJ_STRING)
-        return obj_errorf("join(): requires (array, string)");
+        return obj_error_typef("TypeMismatchError", "join(): requires (array, string)");
     Object *arr   = ARG(0);
     const char *d = ARG(1)->string.str;
     int dl = strlen(d);
@@ -613,7 +639,7 @@ static Object *bw_join(ObjList *args) {
 
 static Object *bw_trim(ObjList *args) {
     REQUIRE(1, "trim");
-    if (ARG(0)->type != OBJ_STRING) return obj_errorf("trim(): requires string");
+    if (ARG(0)->type != OBJ_STRING) return obj_error_typef("TypeMismatchError", "trim(): requires string");
     const char *s = ARG(0)->string.str;
     while (*s && isspace((unsigned char)*s)) s++;
     const char *e = s + strlen(s);
@@ -629,7 +655,7 @@ static Object *bw_trim(ObjList *args) {
 
 static Object *bw_upper(ObjList *args) {
     REQUIRE(1, "upper");
-    if (ARG(0)->type != OBJ_STRING) return obj_errorf("upper(): requires string");
+    if (ARG(0)->type != OBJ_STRING) return obj_error_typef("TypeMismatchError", "upper(): requires string");
     char *s = strdup(ARG(0)->string.str);
     for (int i = 0; s[i]; i++) s[i] = toupper((unsigned char)s[i]);
     Object *o = obj_string(s); free(s); return o;
@@ -637,7 +663,7 @@ static Object *bw_upper(ObjList *args) {
 
 static Object *bw_lower(ObjList *args) {
     REQUIRE(1, "lower");
-    if (ARG(0)->type != OBJ_STRING) return obj_errorf("lower(): requires string");
+    if (ARG(0)->type != OBJ_STRING) return obj_error_typef("TypeMismatchError", "lower(): requires string");
     char *s = strdup(ARG(0)->string.str);
     for (int i = 0; s[i]; i++) s[i] = tolower((unsigned char)s[i]);
     Object *o = obj_string(s); free(s); return o;
@@ -653,13 +679,13 @@ static Object *bw_contains(ObjList *args) {
             if (obj_equals(a->array.elems.items[i], b)) return obj_bool(1);
         return obj_bool(0);
     }
-    return obj_errorf("contains(): not supported for %s", obj_type_name(a->type));
+    return obj_error_typef("TypeMismatchError", "contains(): not supported for %s", obj_type_name(a->type));
 }
 
 static Object *bw_replace(ObjList *args) {
     REQUIRE(3, "replace");
     if (ARG(0)->type != OBJ_STRING || ARG(1)->type != OBJ_STRING || ARG(2)->type != OBJ_STRING)
-        return obj_errorf("replace(): requires three strings");
+        return obj_error_typef("TypeMismatchError", "replace(): requires three strings");
     const char *src = ARG(0)->string.str;
     const char *old = ARG(1)->string.str;
     const char *new = ARG(2)->string.str;
@@ -685,7 +711,7 @@ static Object *bw_replace(ObjList *args) {
 static Object *bw_starts_with(ObjList *args) {
     REQUIRE(2, "starts_with");
     if (ARG(0)->type != OBJ_STRING || ARG(1)->type != OBJ_STRING)
-        return obj_errorf("starts_with(): requires two strings");
+        return obj_error_typef("TypeMismatchError", "starts_with(): requires two strings");
     return obj_bool(strncmp(ARG(0)->string.str, ARG(1)->string.str,
                             strlen(ARG(1)->string.str)) == 0);
 }
@@ -693,7 +719,7 @@ static Object *bw_starts_with(ObjList *args) {
 static Object *bw_ends_with(ObjList *args) {
     REQUIRE(2, "ends_with");
     if (ARG(0)->type != OBJ_STRING || ARG(1)->type != OBJ_STRING)
-        return obj_errorf("ends_with(): requires two strings");
+        return obj_error_typef("TypeMismatchError", "ends_with(): requires two strings");
     const char *s = ARG(0)->string.str, *suffix = ARG(1)->string.str;
     int sl = strlen(s), pl = strlen(suffix);
     if (pl > sl) return obj_bool(0);
@@ -711,7 +737,7 @@ static Object *bw_index_of(ObjList *args) {
             if (obj_equals(ARG(0)->array.elems.items[i], ARG(1))) return obj_int(i);
         return obj_int(-1);
     }
-    return obj_errorf("index_of(): not supported for %s", obj_type_name(ARG(0)->type));
+    return obj_error_typef("TypeMismatchError", "index_of(): not supported for %s", obj_type_name(ARG(0)->type));
 }
 
 /* Depth-first: first hash where o[key] equals want; retains and returns that hash, else NULL */
@@ -744,7 +770,7 @@ static Object *bw_lookup(ObjList *args) {
     REQUIRE(3, "lookup");
     Object *keyobj = ARG(1);
     if (keyobj->type != OBJ_STRING)
-        return obj_errorf("lookup(): key must be string");
+        return obj_error_typef("TypeMismatchError", "lookup(): key must be string");
     Object *found = lookup_recurse(ARG(0), keyobj->string.str, ARG(2));
     if (found) return found;
     return obj_null();
@@ -755,19 +781,19 @@ static Object *bw_floor(ObjList *args) {
     REQUIRE(1, "floor");
     if (ARG(0)->type == OBJ_INT)   return obj_int(ARG(0)->int_val);
     if (ARG(0)->type == OBJ_FLOAT) return obj_int((long long)floor(ARG(0)->float_val));
-    return obj_errorf("floor(): requires number");
+    return obj_error_typef("TypeMismatchError", "floor(): requires number");
 }
 static Object *bw_ceil(ObjList *args) {
     REQUIRE(1, "ceil");
     if (ARG(0)->type == OBJ_INT)   return obj_int(ARG(0)->int_val);
     if (ARG(0)->type == OBJ_FLOAT) return obj_int((long long)ceil(ARG(0)->float_val));
-    return obj_errorf("ceil(): requires number");
+    return obj_error_typef("TypeMismatchError", "ceil(): requires number");
 }
 static Object *bw_abs(ObjList *args) {
     REQUIRE(1, "abs");
     if (ARG(0)->type == OBJ_INT)   return obj_int(llabs(ARG(0)->int_val));
     if (ARG(0)->type == OBJ_FLOAT) return obj_float(fabs(ARG(0)->float_val));
-    return obj_errorf("abs(): requires number");
+    return obj_error_typef("TypeMismatchError", "abs(): requires number");
 }
 static Object *bw_sqrt(ObjList *args) {
     REQUIRE(1, "sqrt");
@@ -781,7 +807,7 @@ static Object *bw_pow(ObjList *args) {
     return obj_float(pow(a, b));
 }
 static Object *bw_max2(ObjList *args) {
-    if (NARGS < 1) return obj_errorf("max(): requires at least 1 argument");
+    if (NARGS < 1) return obj_error_typef("ArityError", "max(): requires at least 1 argument");
     if (ARG(0)->type == OBJ_ARRAY) {
         Object *arr = ARG(0);
         if (arr->array.elems.count == 0) return obj_null();
@@ -802,7 +828,7 @@ static Object *bw_max2(ObjList *args) {
     return obj_float(a > b ? a : b);
 }
 static Object *bw_min2(ObjList *args) {
-    if (NARGS < 1) return obj_errorf("min(): requires at least 1 argument");
+    if (NARGS < 1) return obj_error_typef("ArityError", "min(): requires at least 1 argument");
     if (ARG(0)->type == OBJ_ARRAY) {
         Object *arr = ARG(0);
         if (arr->array.elems.count == 0) return obj_null();
@@ -826,14 +852,14 @@ static Object *bw_min2(ObjList *args) {
 /* ---- Environment ---- */
 static Object *bw_env(ObjList *args) {
     REQUIRE(1, "env");
-    if (ARG(0)->type != OBJ_STRING) return obj_errorf("env(): requires string");
+    if (ARG(0)->type != OBJ_STRING) return obj_error_typef("TypeMismatchError", "env(): requires string");
     const char *v = getenv(ARG(0)->string.str);
     return v ? obj_string(v) : obj_null();
 }
 
 static Object *bw_env_or(ObjList *args) {
     REQUIRE(2, "env_or");
-    if (ARG(0)->type != OBJ_STRING) return obj_errorf("env_or(): requires string");
+    if (ARG(0)->type != OBJ_STRING) return obj_error_typef("TypeMismatchError", "env_or(): requires string");
     const char *v = getenv(ARG(0)->string.str);
     if (v && v[0] != '\0') return obj_string(v);
     obj_retain(ARG(1));
@@ -843,10 +869,10 @@ static Object *bw_env_or(ObjList *args) {
 /* ---- File I/O ---- */
 static Object *bw_read_file(ObjList *args) {
     REQUIRE(1, "read_file");
-    if (ARG(0)->type != OBJ_STRING) return obj_errorf("read_file(): requires string path");
+    if (ARG(0)->type != OBJ_STRING) return obj_error_typef("TypeMismatchError", "read_file(): requires string path");
     FILE *f = fopen(ARG(0)->string.str, "rb");
-    if (!f) return obj_errorf("read_file(): cannot open '%s': %s",
-                               ARG(0)->string.str, strerror(errno));
+    if (!f) return obj_error_typef("IOError", "read_file(): cannot open '%s': %s",
+                                   ARG(0)->string.str, strerror(errno));
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
@@ -862,10 +888,10 @@ static Object *bw_read_file(ObjList *args) {
 static Object *bw_write_file(ObjList *args) {
     REQUIRE(2, "write_file");
     if (ARG(0)->type != OBJ_STRING || ARG(1)->type != OBJ_STRING)
-        return obj_errorf("write_file(): requires (string path, string content)");
+        return obj_error_typef("TypeMismatchError", "write_file(): requires (string path, string content)");
     FILE *f = fopen(ARG(0)->string.str, "wb");
-    if (!f) return obj_errorf("write_file(): cannot open '%s': %s",
-                               ARG(0)->string.str, strerror(errno));
+    if (!f) return obj_error_typef("IOError", "write_file(): cannot open '%s': %s",
+                                   ARG(0)->string.str, strerror(errno));
     fputs(ARG(1)->string.str, f);
     fclose(f);
     return obj_null();
@@ -874,10 +900,10 @@ static Object *bw_write_file(ObjList *args) {
 static Object *bw_append_file(ObjList *args) {
     REQUIRE(2, "append_file");
     if (ARG(0)->type != OBJ_STRING || ARG(1)->type != OBJ_STRING)
-        return obj_errorf("append_file(): requires (string path, string content)");
+        return obj_error_typef("TypeMismatchError", "append_file(): requires (string path, string content)");
     FILE *f = fopen(ARG(0)->string.str, "ab");
-    if (!f) return obj_errorf("append_file(): cannot open '%s': %s",
-                               ARG(0)->string.str, strerror(errno));
+    if (!f) return obj_error_typef("IOError", "append_file(): cannot open '%s': %s",
+                                   ARG(0)->string.str, strerror(errno));
     fputs(ARG(1)->string.str, f);
     fclose(f);
     return obj_null();
@@ -1095,21 +1121,21 @@ static Object *jd_parse_value(JD *j) {
 
 static Object *bw_json_decode(ObjList *args) {
     REQUIRE(1, "json_decode");
-    if (ARG(0)->type != OBJ_STRING) return obj_errorf("json_decode(): requires string");
+    if (ARG(0)->type != OBJ_STRING) return obj_error_typef("TypeMismatchError", "json_decode(): requires string");
     JD j = { ARG(0)->string.str, 0 };
     Object *o = jd_parse_value(&j);
-    return o ? o : obj_errorf("json_decode(): invalid JSON");
+    return o ? o : obj_error_typef("JsonError", "json_decode(): invalid JSON");
 }
 
 /* ---- HTTP Server builtins ---- */
 static Object *bw_create_server(ObjList *args) {
     if (NARGS < 1 || NARGS > 2)
-        return obj_errorf("create_server() requires 1 or 2 argument(s)");
-    if (ARG(0)->type != OBJ_INT) return obj_errorf("create_server(): port must be int");
+        return obj_error_typef("ArityError", "create_server() requires 1 or 2 argument(s)");
+    if (ARG(0)->type != OBJ_INT) return obj_error_typef("TypeMismatchError", "create_server(): port must be int");
     Object *cb = NULL;
     if (NARGS == 2) {
         if (ARG(1)->type != OBJ_FUNCTION && ARG(1)->type != OBJ_BUILTIN)
-            return obj_errorf("create_server(): optional callback must be a function");
+            return obj_error_typef("TypeMismatchError", "create_server(): optional callback must be a function");
         cb = ARG(1);
     }
     return obj_http_server((int)ARG(0)->int_val, cb);
@@ -1117,11 +1143,11 @@ static Object *bw_create_server(ObjList *args) {
 
 static Object *bw_route(ObjList *args) {
     REQUIRE(4, "route");
-    if (ARG(0)->type != OBJ_HTTP_SERVER) return obj_errorf("route(): first arg must be server");
-    if (ARG(1)->type != OBJ_STRING)      return obj_errorf("route(): method must be string");
-    if (ARG(2)->type != OBJ_STRING)      return obj_errorf("route(): path must be string");
+    if (ARG(0)->type != OBJ_HTTP_SERVER) return obj_error_typef("TypeMismatchError", "route(): first arg must be server");
+    if (ARG(1)->type != OBJ_STRING)      return obj_error_typef("TypeMismatchError", "route(): method must be string");
+    if (ARG(2)->type != OBJ_STRING)      return obj_error_typef("TypeMismatchError", "route(): path must be string");
     if (ARG(3)->type != OBJ_FUNCTION && ARG(3)->type != OBJ_BUILTIN)
-        return obj_errorf("route(): handler must be function");
+        return obj_error_typef("TypeMismatchError", "route(): handler must be function");
 
     Route *r   = malloc(sizeof(Route));
     r->method  = strdup(ARG(1)->string.str);
@@ -1151,8 +1177,8 @@ static Env         *_global_env    = NULL;
 
 static Object *bw_serve(ObjList *args) {
     REQUIRE(1, "serve");
-    if (ARG(0)->type != OBJ_HTTP_SERVER) return obj_errorf("serve(): argument must be server");
-    if (!_global_interp) return obj_errorf("serve(): interpreter not set");
+    if (ARG(0)->type != OBJ_HTTP_SERVER) return obj_error_typef("TypeMismatchError", "serve(): argument must be server");
+    if (!_global_interp) return obj_error_typef("InternalError", "serve(): interpreter not set");
     http_serve(ARG(0), _global_interp, _global_env);
     return obj_null();
 }
@@ -1165,7 +1191,7 @@ void builtins_set_interp(Interpreter *it, Env *env) {
 /* ---- fetch ---- */
 static Object *bw_fetch(ObjList *args) {
     if (NARGS < 1 || ARG(0)->type != OBJ_STRING)
-        return obj_errorf("fetch(): first argument must be a url string");
+        return obj_error_typef("TypeMismatchError", "fetch(): first argument must be a url string");
 
     const char *url    = ARG(0)->string.str;
     const char *method = "GET";
@@ -1255,6 +1281,8 @@ void builtins_register(Env *env) {
     REG("float",       bw_float);
     REG("bool",        bw_bool);
     REG("type",        bw_type);
+    REG("error_type",  bw_error_type);
+    REG("is_error_type", bw_is_error_type);
 
     /* Collections */
     REG("len",         bw_len);

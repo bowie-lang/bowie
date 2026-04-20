@@ -572,7 +572,7 @@ static size_t curl_header_cb(char *ptr, size_t size, size_t nmemb, void *ud) {
 Object *http_fetch(const char *url, const char *method,
                    Object *req_headers, const char *body) {
     CURL *curl = curl_easy_init();
-    if (!curl) return obj_errorf("fetch: failed to initialise curl");
+    if (!curl) return obj_error_typef("NetworkError", "fetch: failed to initialise curl");
 
     DynBuf resp_body = { malloc(4096), 0, 4096 };
     resp_body.data[0] = '\0';
@@ -618,7 +618,7 @@ Object *http_fetch(const char *url, const char *method,
         if (hlist) curl_slist_free_all(hlist);
         obj_release(resp_hdrs);
         free(resp_body.data);
-        return obj_errorf("fetch: %s", curl_easy_strerror(rc));
+        return obj_error_typef("NetworkError", "fetch: %s", curl_easy_strerror(rc));
     }
 
     long status = 0;
@@ -676,9 +676,11 @@ Object *http_fetch(const char *url, const char *method,
     ParsedURL parsed;
     int r = parse_url(url, &parsed);
     if (r == -1)
-        return obj_errorf("fetch: HTTPS is not supported (use an http:// URL)");
+        return obj_error_typef("URLParseError", "fetch: HTTPS is not supported (use an http:// URL)");
     if (r == 0)
-        return obj_errorf("fetch: invalid URL '%s' (only http:// is supported)", url);
+        return obj_error_typef("URLParseError",
+                               "fetch: invalid URL '%s' (only http:// is supported)",
+                               url);
 
 #ifdef _WIN32
     WSADATA wsa; WSAStartup(MAKEWORD(2,2), &wsa);
@@ -691,7 +693,7 @@ Object *http_fetch(const char *url, const char *method,
     hints.ai_family   = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     if (getaddrinfo(parsed.host, port_str, &hints, &res) != 0)
-        return obj_errorf("fetch: cannot resolve host '%s'", parsed.host);
+        return obj_error_typef("NetworkError", "fetch: cannot resolve host '%s'", parsed.host);
 
     int fd = -1;
     for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
@@ -702,7 +704,9 @@ Object *http_fetch(const char *url, const char *method,
     }
     freeaddrinfo(res);
     if (fd < 0)
-        return obj_errorf("fetch: cannot connect to '%s:%d'", parsed.host, parsed.port);
+        return obj_error_typef("NetworkError",
+                               "fetch: cannot connect to '%s:%d'",
+                               parsed.host, parsed.port);
 
     /* Build request — use HTTP/1.0 to avoid chunked encoding */
     int body_len = body ? (int)strlen(body) : 0;
