@@ -81,7 +81,7 @@ Object *obj_hash(void) {
     return o;
 }
 
-Object *obj_function(char **params, int pc, Node *body, Env *closure, const char *name, int is_async) {
+Object *obj_function(char **params, int pc, Node *body, Env *closure, const char *name, int is_async, int has_rest) {
     Object *o        = obj_new(OBJ_FUNCTION);
     o->fn.params     = params;
     o->fn.param_count= pc;
@@ -89,6 +89,7 @@ Object *obj_function(char **params, int pc, Node *body, Env *closure, const char
     o->fn.closure    = closure;
     o->fn.name       = name ? strdup(name) : NULL;
     o->fn.is_async   = is_async;
+    o->fn.has_rest   = has_rest;
     if (closure) env_retain(closure);
     return o;
 }

@@ -153,7 +153,9 @@ Token lexer_next(Lexer *l) {
         case ']': return mktok(TOK_RBRACKET, "]", line);
         case ',': return mktok(TOK_COMMA,    ",", line);
         case ':': return mktok(TOK_COLON,    ":", line);
-        case '.': return mktok(TOK_DOT,      ".", line);
+        case '.':
+            if (peek(l) == '.' && peek2(l) == '.') { adv(l); adv(l); return mktok(TOK_ELLIPSIS, "...", line); }
+            return mktok(TOK_DOT, ".", line);
         case ';': return mktok(TOK_SEMICOLON,";", line);
         case '=':
             if (peek(l) == '=') { adv(l); return mktok(TOK_EQ,  "==", line); }
@@ -238,6 +240,7 @@ const char *tok_name(TokenType t) {
         case TOK_COMMA:     return ",";
         case TOK_COLON:     return ":";
         case TOK_DOT:       return ".";
+        case TOK_ELLIPSIS:  return "...";
         case TOK_SEMICOLON: return ";";
     }
     return "UNKNOWN";

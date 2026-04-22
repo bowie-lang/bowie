@@ -287,35 +287,48 @@ static Object *eval_call(Interpreter *it, Node *n, Env *env) {
     if (fn->type == OBJ_BUILTIN) {
         result = fn->builtin.fn(&args);
     } else if (fn->type == OBJ_FUNCTION) {
-        if (args.count != fn->fn.param_count) {
-            result = obj_error_typef("ArityError",
-                                     "line %d: %s expects %d args, got %d",
-                                     n->line,
-                                     fn->fn.name ? fn->fn.name : "fn",
-                                     fn->fn.param_count, args.count);
+        {
+            int regular = fn->fn.has_rest ? fn->fn.param_count - 1 : fn->fn.param_count;
+            int arity_ok = fn->fn.has_rest ? args.count >= regular : args.count == fn->fn.param_count;
+            if (!arity_ok) {
+                result = obj_error_typef("ArityError",
+                                         "line %d: %s expects %s%d args, got %d",
+                                         n->line,
+                                         fn->fn.name ? fn->fn.name : "fn",
+                                         fn->fn.has_rest ? "at least " : "",
+                                         regular, args.count);
 #ifndef _WIN32
-        } else if (fn->fn.is_async && g_event_loop) {
-            Object *promise = obj_promise();
-            Coro *coro = coro_new(it, fn, &args, promise);
-            event_loop_enqueue(coro);
-            for (int i = 0; i < args.count; i++) obj_release(args.items[i]);
-            free(args.items);
-            obj_release(fn);
-            return promise;
+            } else if (fn->fn.is_async && g_event_loop) {
+                Object *promise = obj_promise();
+                Coro *coro = coro_new(it, fn, &args, promise);
+                event_loop_enqueue(coro);
+                for (int i = 0; i < args.count; i++) obj_release(args.items[i]);
+                free(args.items);
+                obj_release(fn);
+                return promise;
 #endif
-        } else {
-            Env *fn_env = env_new(fn->fn.closure);
-            for (int i = 0; i < fn->fn.param_count; i++) {
-                env_set(fn_env, fn->fn.params[i], args.items[i]);
+            } else {
+                Env *fn_env = env_new(fn->fn.closure);
+                for (int i = 0; i < regular; i++)
+                    env_set(fn_env, fn->fn.params[i], args.items[i]);
+                if (fn->fn.has_rest) {
+                    Object *rest = obj_array();
+                    for (int i = regular; i < args.count; i++) {
+                        obj_retain(args.items[i]);
+                        objlist_push(&rest->array.elems, args.items[i]);
+                    }
+                    env_set(fn_env, fn->fn.params[fn->fn.param_count - 1], rest);
+                    obj_release(rest);
+                }
+                result = eval_block(it, fn->fn.body, fn_env);
+                if (IS_RET(result)) {
+                    Object *v = result->ret.value;
+                    obj_retain(v);
+                    obj_release(result);
+                    result = v;
+                }
+                env_release(fn_env);
             }
-            result = eval_block(it, fn->fn.body, fn_env);
-            if (IS_RET(result)) {
-                Object *v = result->ret.value;
-                obj_retain(v);
-                obj_release(result);
-                result = v;
-            }
-            env_release(fn_env);
         }
     } else {
         result = obj_error_typef("TypeMismatchError",
@@ -600,7 +613,7 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
             for (int i = 0; i < n->fn.param_count; i++)
                 params[i] = dup_cstr(n->fn.params[i]);
             Object *fn = obj_function(params, n->fn.param_count, n->fn.body, env,
-                                      n->fn.name, n->fn.is_async);
+                                      n->fn.name, n->fn.is_async, n->fn.has_rest);
             return fn;
         }
 
@@ -730,6 +743,29 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
                 memcpy(aliased, it->project_root, rlen);
                 memcpy(aliased + rlen, raw + 1, plen + 1);
                 raw = aliased;
+            } else if (it->project_root && strncmp(raw, "@bowie/", 7) == 0) {
+                const char *pkg_name = raw + 7;
+                size_t root_len = strlen(it->project_root);
+                size_t pkg_len  = strlen(pkg_name);
+                aliased = malloc(root_len + pkg_len + 32);
+                if (aliased) {
+                    snprintf(aliased, root_len + pkg_len + 32,
+                             "%s/packages/%s/main.bow", it->project_root, pkg_name);
+                    FILE *probe = fopen(aliased, "rb");
+                    if (!probe) {
+                        snprintf(aliased, root_len + pkg_len + 32,
+                                 "%s/packages/%s/index.bow", it->project_root, pkg_name);
+                        probe = fopen(aliased, "rb");
+                        if (!probe) {
+                            free(aliased);
+                            return obj_error_typef("ImportError",
+                                "line %d: @bowie package '%s' not found "
+                                "in packages/", n->line, raw);
+                        }
+                    }
+                    if (probe) fclose(probe);
+                    raw = aliased;
+                }
             } else if (it->project_root && is_package_import(raw)) {
                 size_t root_len = strlen(it->project_root);
                 size_t pkg_len  = strlen(raw);
@@ -800,13 +836,25 @@ Object *interp_call_fn(Interpreter *it, Object *fn, ObjList *args) {
         return fn->builtin.fn(args);
     if (fn->type != OBJ_FUNCTION)
         return obj_error_typef("TypeMismatchError", "not a function: %s", obj_type_name(fn->type));
-    if (args->count != fn->fn.param_count)
-        return obj_error_typef("ArityError", "%s expects %d args, got %d",
+    int regular = fn->fn.has_rest ? fn->fn.param_count - 1 : fn->fn.param_count;
+    int arity_ok = fn->fn.has_rest ? args->count >= regular : args->count == fn->fn.param_count;
+    if (!arity_ok)
+        return obj_error_typef("ArityError", "%s expects %s%d args, got %d",
                                fn->fn.name ? fn->fn.name : "fn",
-                               fn->fn.param_count, args->count);
+                               fn->fn.has_rest ? "at least " : "",
+                               regular, args->count);
     Env *fn_env = env_new(fn->fn.closure);
-    for (int i = 0; i < fn->fn.param_count; i++)
+    for (int i = 0; i < regular; i++)
         env_set(fn_env, fn->fn.params[i], args->items[i]);
+    if (fn->fn.has_rest) {
+        Object *rest = obj_array();
+        for (int i = regular; i < args->count; i++) {
+            obj_retain(args->items[i]);
+            objlist_push(&rest->array.elems, args->items[i]);
+        }
+        env_set(fn_env, fn->fn.params[fn->fn.param_count - 1], rest);
+        obj_release(rest);
+    }
     Object *result = eval_block(it, fn->fn.body, fn_env);
     if (IS_RET(result)) {
         Object *v = result->ret.value;

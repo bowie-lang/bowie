@@ -74,6 +74,7 @@ typedef enum {
     TOK_COMMA,
     TOK_COLON,
     TOK_DOT,
+    TOK_ELLIPSIS,
     TOK_SEMICOLON,
 } TokenType;
 

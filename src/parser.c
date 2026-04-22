@@ -185,9 +185,25 @@ static Node *parse_fn(Parser *p) {
 
     char **params     = NULL;
     int    param_count= 0, param_cap = 0;
+    int    has_rest   = 0;
 
     while (!cur_is(p, TOK_RPAREN) && !cur_is(p, TOK_EOF)) {
         if (p->error) break;
+        if (cur_is(p, TOK_ELLIPSIS)) {
+            advance(p);
+            if (!cur_is(p, TOK_IDENT)) {
+                set_error(p, "line %d: expected parameter name after '...'", p->cur.line);
+                break;
+            }
+            if (param_count >= param_cap) {
+                param_cap = param_cap ? param_cap * 2 : 4;
+                params    = realloc(params, param_cap * sizeof(char *));
+            }
+            params[param_count++] = strdup(p->cur.value);
+            has_rest = 1;
+            advance(p);
+            break;
+        }
         if (!cur_is(p, TOK_IDENT)) {
             set_error(p, "line %d: expected param name", p->cur.line);
             break;
@@ -215,6 +231,7 @@ static Node *parse_fn(Parser *p) {
     Node *n            = node_new(NODE_FUNCTION, line);
     n->fn.params       = params;
     n->fn.param_count  = param_count;
+    n->fn.has_rest     = has_rest;
     n->fn.body         = body;
     n->fn.name         = fn_name;
     return n;

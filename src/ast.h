@@ -112,7 +112,7 @@ struct Node {
         struct { Node *cond; Node *then_; Node *else_; } if_;
 
         /* NODE_FUNCTION */
-        struct { char **params; int param_count; Node *body; char *name; int is_async; } fn;
+        struct { char **params; int param_count; Node *body; char *name; int is_async; int has_rest; } fn;
 
         /* NODE_AWAIT */
         struct { Node *expr; } await_;

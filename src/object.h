@@ -69,6 +69,7 @@ struct Object {
             Env    *closure;
             char   *name;
             int     is_async;
+            int     has_rest;
         } fn;
         struct { BuiltinFn fn; const char *name; }             builtin;
         struct { Object *value; }                               ret;
@@ -93,7 +94,7 @@ Object *obj_bool(int val);
 Object *obj_null(void);
 Object *obj_array(void);
 Object *obj_hash(void);
-Object *obj_function(char **params, int pc, Node *body, Env *closure, const char *name, int is_async);
+Object *obj_function(char **params, int pc, Node *body, Env *closure, const char *name, int is_async, int has_rest);
 Object *obj_promise(void);
 Object *obj_builtin(BuiltinFn fn, const char *name);
 Object *obj_return(Object *val);

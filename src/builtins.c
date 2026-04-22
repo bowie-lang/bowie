@@ -368,6 +368,31 @@ static Object *bw_sprintf(ObjList *args) {
     return o;
 }
 
+/* vsprintf(format, array) — array-based sprintf for variadic dispatch */
+static Object *bw_vsprintf(ObjList *args) {
+    if (args->count < 2 || args->items[0]->type != OBJ_STRING)
+        return obj_error_typef("ArityError", "vsprintf(format, array): expected 2 args");
+    if (args->items[1]->type != OBJ_ARRAY)
+        return obj_error_typef("TypeMismatchError", "vsprintf(): second argument must be an array");
+    ObjList flat;
+    objlist_init(&flat);
+    obj_retain(args->items[0]);
+    objlist_push(&flat, args->items[0]);
+    ObjList *elems = &args->items[1]->array.elems;
+    for (int i = 0; i < elems->count; i++) {
+        obj_retain(elems->items[i]);
+        objlist_push(&flat, elems->items[i]);
+    }
+    char *out = NULL;
+    char err[256];
+    int rc = bow_format_build(&flat, &out, err, sizeof err);
+    objlist_free(&flat);
+    if (rc != 0) return obj_error_typef("FormatError", "vsprintf(): %s", err);
+    Object *o = obj_string(out);
+    free(out);
+    return o;
+}
+
 /* ---- Type conversion ---- */
 static Object *bw_str(ObjList *args) {
     REQUIRE(1, "str");
@@ -1272,6 +1297,7 @@ void builtins_register(Env *env) {
     REG("println",     bw_println);
     REG("printf",      bw_printf);
     REG("sprintf",     bw_sprintf);
+    REG("vsprintf",    bw_vsprintf);
     REG("eprint",      bw_eprint);
     REG("input",       bw_input);
 
