@@ -789,11 +789,34 @@ static int cmd_install(const char *pkg_path) {
 #endif /* !_WIN32 */
 
 int main(int argc, char *argv[]) {
-    /* Pre-pass: extract --env-file <path> from anywhere in argv */
+    /* Pre-pass: extract --env-file <path> and handle --help/-h from anywhere in argv */
     char *filtered[argc];
     int fargc = 0;
     for (int i = 0; i < argc; i++) {
-        if (strcmp(argv[i], "--env-file") == 0) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            printf(
+                "bowie - the bowie language interpreter\n"
+                "\n"
+                "USAGE:\n"
+                "    bowie [OPTIONS] [script.bow]\n"
+                "    bowie <command> [args]\n"
+                "\n"
+                "OPTIONS:\n"
+                "    -h, --help              Print this help message\n"
+                "    --env-file <path>       Load environment variables from a .env file\n"
+                "\n"
+                "COMMANDS:\n"
+                "    run <task>              Run a task defined in bowie.json\n"
+                "    install <package>       Install a package (e.g. github.com/owner/repo)\n"
+                "\n"
+                "EXAMPLES:\n"
+                "    bowie                   Start the interactive REPL\n"
+                "    bowie script.bow        Run a bowie script\n"
+                "    bowie run dev           Run the 'dev' task from bowie.json\n"
+                "    bowie install github.com/user/repo\n"
+            );
+            return 0;
+        } else if (strcmp(argv[i], "--env-file") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "bowie: --env-file requires a path argument\n");
                 return 1;
