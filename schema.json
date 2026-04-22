@@ -1,0 +1,39 @@
+{
+	"$schema": "http://json-schema.org/draft-04/schema#",
+	"title": "Bowie Project",
+	"description": "Schema for bowie.json project configuration file",
+	"type": "object",
+	"required": ["name", "version"],
+	"additionalProperties": false,
+	"properties": {
+		"$schema": {
+			"type": "string"
+		},
+		"name": {
+			"type": "string",
+			"description": "Project name"
+		},
+		"description": {
+			"type": "string",
+			"description": "Project description"
+		},
+		"version": {
+			"type": "string",
+			"description": "Project version"
+		},
+		"tasks": {
+			"type": "object",
+			"description": "Named shell commands runnable via `bowie run <task>`",
+			"additionalProperties": {
+				"type": "string"
+			}
+		},
+		"dependencies": {
+			"type": "object",
+			"description": "Package dependencies mapped to commit hashes or version tags",
+			"additionalProperties": {
+				"type": "string"
+			}
+		}
+	}
+}
