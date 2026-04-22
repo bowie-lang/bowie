@@ -22,6 +22,15 @@ static char *dup_cstr(const char *s) {
     return copy;
 }
 
+static int is_package_import(const char *path) {
+    if (!path || path[0] == '.' || path[0] == '/' || path[0] == '@') return 0;
+    const char *slash = strchr(path, '/');
+    if (!slash) return 0;
+    for (const char *c = path; c < slash; c++)
+        if (*c == '.') return 1;
+    return 0;
+}
+
 #ifdef _WIN32
   #include <windows.h>
   static char *resolve_path(const char *base_file, const char *rel) {
@@ -721,6 +730,28 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
                 memcpy(aliased, it->project_root, rlen);
                 memcpy(aliased + rlen, raw + 1, plen + 1);
                 raw = aliased;
+            } else if (it->project_root && is_package_import(raw)) {
+                size_t root_len = strlen(it->project_root);
+                size_t pkg_len  = strlen(raw);
+                aliased = malloc(root_len + pkg_len + 32);
+                if (aliased) {
+                    snprintf(aliased, root_len + pkg_len + 32,
+                             "%s/bowie_modules/%s/main.bow", it->project_root, raw);
+                    FILE *probe = fopen(aliased, "rb");
+                    if (!probe) {
+                        snprintf(aliased, root_len + pkg_len + 32,
+                                 "%s/bowie_modules/%s/index.bow", it->project_root, raw);
+                        probe = fopen(aliased, "rb");
+                        if (!probe) {
+                            free(aliased);
+                            return obj_error_typef("ImportError",
+                                "line %d: package '%s' not installed "
+                                "(run: bowie install %s)", n->line, raw, raw);
+                        }
+                    }
+                    if (probe) fclose(probe);
+                    raw = aliased;
+                }
             }
             char *resolved = resolve_path(it->current_file, raw);
             free(aliased);

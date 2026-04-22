@@ -9,6 +9,8 @@
 #include "builtins.h"
 #ifndef _WIN32
 #include <sys/wait.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include "event_loop.h"
 #endif
 
@@ -92,23 +94,40 @@ static void run_source(const char *source, const char *filename) {
     Interpreter *interp  = interp_new();
     interp->current_file = (char *)filename;
 
-    /* Compute project root (absolute directory of the entry-point file) for "@/" aliases */
+    /* Compute project root: walk up from the entry-point file's directory until
+       a directory containing bowie.json is found. Falls back to the entry dir. */
     {
         char *abs = realpath(filename, NULL);
+        char *entry_dir = NULL;
         if (abs) {
             char *sl = strrchr(abs, '/');
             if (sl) *sl = '\0';
-            interp->project_root = dup_cstr(abs);
-            free(abs);
-        } else {
-            char *root = dup_cstr(filename);
-            if (!root) interp->project_root = NULL;
-            else {
-                char *sl = strrchr(root, '/');
-                if (sl) { *sl = '\0'; interp->project_root = root; }
-                else    { free(root); interp->project_root = dup_cstr("."); }
+            entry_dir = abs;
+        }
+        if (!entry_dir) {
+            char *copy = dup_cstr(filename);
+            if (copy) {
+                char *sl = strrchr(copy, '/');
+                if (sl) { *sl = '\0'; entry_dir = copy; }
+                else    { free(copy); entry_dir = dup_cstr("."); }
             }
         }
+        char *found = NULL;
+        if (entry_dir) {
+            char *dir = dup_cstr(entry_dir);
+            while (dir) {
+                char probe[4096];
+                snprintf(probe, sizeof(probe), "%s/bowie.json", dir);
+                FILE *f = fopen(probe, "r");
+                if (f) { fclose(f); found = dir; dir = NULL; break; }
+                char *sl = strrchr(dir, '/');
+                if (!sl || sl == dir) { free(dir); dir = NULL; break; }
+                *sl = '\0';
+            }
+        }
+        interp->project_root = found ? found : entry_dir;
+        if (found && entry_dir) free(entry_dir);
+        if (!interp->project_root) interp->project_root = dup_cstr(".");
     }
 
     builtins_set_interp(interp, interp->globals);
@@ -408,6 +427,367 @@ static int cmd_run(const char *task_name) {
 #endif
 }
 
+#ifndef _WIN32
+
+static int is_valid_pkg_path(const char *pkg) {
+    if (!pkg || pkg[0] == '.' || pkg[0] == '/' || pkg[0] == '@') return 0;
+    for (const char *p = pkg; *p; p++) {
+        char c = *p;
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+              c == '.' || c == '/'))
+            return 0;
+    }
+    int slashes = 0;
+    const char *first_slash = NULL;
+    for (const char *p = pkg; *p; p++) {
+        if (*p == '/') { if (!first_slash) first_slash = p; slashes++; }
+    }
+    if (slashes < 2 || !first_slash) return 0;
+    for (const char *c = pkg; c < first_slash; c++)
+        if (*c == '.') return 1;
+    return 0;
+}
+
+static int mkdir_p(const char *path) {
+    char *buf = malloc(strlen(path) + 1);
+    if (!buf) return -1;
+    strcpy(buf, path);
+    for (char *p = buf + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            if (mkdir(buf, 0755) != 0 && errno != EEXIST) { free(buf); return -1; }
+            *p = '/';
+        }
+    }
+    if (mkdir(buf, 0755) != 0 && errno != EEXIST) { free(buf); return -1; }
+    free(buf);
+    return 0;
+}
+
+static char *get_commit_hash(const char *dir) {
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd), "git -C \"%s\" rev-parse HEAD 2>/dev/null", dir);
+    FILE *fp = popen(cmd, "r");
+    if (!fp) return NULL;
+    char buf[128];
+    if (!fgets(buf, sizeof(buf), fp)) { pclose(fp); return NULL; }
+    pclose(fp);
+    size_t len = strlen(buf);
+    while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r')) buf[--len] = '\0';
+    if (len == 0) return NULL;
+    char *out = malloc(len + 1);
+    if (!out) return NULL;
+    memcpy(out, buf, len + 1);
+    return out;
+}
+
+/* Return the malloc'd string value for `key` within the object bounded by
+   obj_open ('{') and obj_close ('}'). Returns NULL if key not found. */
+static char *json_obj_get(const char *obj_open, const char *obj_close, const char *key) {
+    const char *q = obj_open + 1;
+    while (1) {
+        q = json_skip_ws(q);
+        if (!*q || q >= obj_close || *q == '}') break;
+        if (*q != '"') break;
+        char *k = json_parse_string(&q);
+        if (!k) break;
+        q = json_skip_ws(q);
+        if (*q != ':') { free(k); break; }
+        q++;
+        q = json_skip_ws(q);
+        char *v = json_parse_string(&q);
+        if (!v) { free(k); break; }
+        if (strcmp(k, key) == 0) { free(k); return v; }
+        free(k); free(v);
+        q = json_skip_ws(q);
+        if (*q == ',') q++;
+    }
+    return NULL;
+}
+
+/* Inject or update "pkg_path": "hash" inside a JSON object whose text is in `orig`.
+   obj_open points to '{' and obj_close points to the matching '}'.
+   Writes the full modified content to `out`. */
+static void write_updated_obj(FILE *out, const char *orig,
+                               const char *obj_open, const char *obj_close,
+                               const char *pkg_path, const char *hash) {
+    const char *q = obj_open + 1;
+    const char *existing_val_open  = NULL;
+    const char *existing_val_close = NULL;
+    const char *last_val_close     = NULL;
+    const char *last_key_start     = NULL;
+
+    while (1) {
+        q = json_skip_ws(q);
+        if (!*q || q >= obj_close || *q == '}') break;
+        if (*q != '"') break;
+        last_key_start = q;
+        char *k = json_parse_string(&q);
+        if (!k) break;
+        q = json_skip_ws(q);
+        if (*q != ':') { free(k); break; }
+        q++;
+        q = json_skip_ws(q);
+        const char *val_start = q;
+        char *v = json_parse_string(&q);
+        if (!v) { free(k); break; }
+        last_val_close = q;
+        int match = (strcmp(k, pkg_path) == 0);
+        free(k);
+        if (match) {
+            existing_val_open  = val_start;
+            existing_val_close = q;
+            free(v);
+            break;
+        }
+        free(v);
+        q = json_skip_ws(q);
+        if (*q == ',') q++;
+    }
+
+    if (existing_val_open) {
+        fwrite(orig, 1, (size_t)(existing_val_open - orig), out);
+        fprintf(out, "\"%s\"", hash);
+        fputs(existing_val_close, out);
+        return;
+    }
+
+    if (!last_val_close) {
+        /* Empty block */
+        fwrite(orig, 1, (size_t)(obj_close - orig), out);
+        fprintf(out, "\n    \"%s\": \"%s\"\n  ", pkg_path, hash);
+        fputs(obj_close, out);
+        return;
+    }
+
+    /* Determine indent from the whitespace preceding the last key */
+    char indent[64] = "    ";
+    if (last_key_start && last_key_start > orig) {
+        const char *nl = last_key_start - 1;
+        while (nl >= orig && *nl != '\n') nl--;
+        size_t ilen = (size_t)(last_key_start - nl - 1);
+        if (ilen > 0 && ilen < sizeof(indent) - 1) {
+            memcpy(indent, nl + 1, ilen);
+            indent[ilen] = '\0';
+        }
+    }
+
+    /* Write up to end of last value, append comma + new entry, then write the rest
+       (which includes the original trailing whitespace and closing '}') */
+    fwrite(orig, 1, (size_t)(last_val_close - orig), out);
+    fprintf(out, ",\n%s\"%s\": \"%s\"", indent, pkg_path, hash);
+    fputs(last_val_close, out);
+}
+
+static int update_bowie_json(const char *pkg_path, const char *hash) {
+    char *orig = read_file("bowie.json");
+    if (!orig) {
+        FILE *f = fopen("bowie.json", "w");
+        if (!f) { fprintf(stderr, "bowie: cannot create bowie.json\n"); return -1; }
+        fprintf(f, "{\n  \"dependencies\": {\n    \"%s\": \"%s\"\n  }\n}\n", pkg_path, hash);
+        fclose(f);
+        return 0;
+    }
+
+    const char *p = json_skip_ws(orig);
+    if (*p != '{') { free(orig); fprintf(stderr, "bowie: bowie.json is not a JSON object\n"); return -1; }
+    p++;
+
+    const char *dep_obj_open  = NULL;
+    const char *dep_obj_close = NULL;
+
+    while (1) {
+        p = json_skip_ws(p);
+        if (*p == '}' || *p == '\0') break;
+        if (*p != '"') { free(orig); return -1; }
+        char *key = json_parse_string(&p);
+        if (!key) { free(orig); return -1; }
+        p = json_skip_ws(p);
+        if (*p != ':') { free(key); free(orig); return -1; }
+        p++;
+        p = json_skip_ws(p);
+        int is_dep = (strcmp(key, "dependencies") == 0);
+        free(key);
+
+        if (is_dep && *p == '{') {
+            dep_obj_open = p;
+            int depth = 1; p++;
+            while (*p && depth > 0) {
+                if (*p == '"') { char *s = json_parse_string(&p); free(s); continue; }
+                if (*p == '{') depth++;
+                if (*p == '}') { depth--; if (depth == 0) break; }
+                p++;
+            }
+            dep_obj_close = p;
+            break;
+        }
+
+        /* Skip non-"dependencies" value */
+        if (*p == '"') { char *v = json_parse_string(&p); free(v); }
+        else if (*p == '{' || *p == '[') {
+            char open = *p, close = (*p == '{') ? '}' : ']';
+            int depth = 1; p++;
+            while (*p && depth > 0) {
+                if (*p == '"') { char *s = json_parse_string(&p); free(s); continue; }
+                if (*p == open)  depth++;
+                if (*p == close) depth--;
+                p++;
+            }
+        } else {
+            while (*p && *p != ',' && *p != '}') p++;
+        }
+        p = json_skip_ws(p);
+        if (*p == ',') p++;
+    }
+
+    /* Skip write if the package already has this exact hash */
+    if (dep_obj_open) {
+        char *existing = json_obj_get(dep_obj_open, dep_obj_close, pkg_path);
+        if (existing) {
+            int unchanged = (strcmp(existing, hash) == 0);
+            free(existing);
+            if (unchanged) { free(orig); return 0; }
+        }
+    }
+
+    FILE *out = fopen("bowie.json", "w");
+    if (!out) { free(orig); fprintf(stderr, "bowie: cannot write bowie.json\n"); return -1; }
+
+    if (!dep_obj_open) {
+        /* No dependencies block: find final '}' of top-level and inject before it */
+        const char *end = orig + strlen(orig) - 1;
+        while (end > orig && (*end == '\n' || *end == '\r' || *end == ' ' || *end == '\t')) end--;
+        /* end now points to closing '}'; find last non-whitespace before it */
+        const char *last_content = end - 1;
+        while (last_content > orig &&
+               (*last_content == ' ' || *last_content == '\t' ||
+                *last_content == '\n' || *last_content == '\r')) last_content--;
+        int need_comma = (*last_content != '{');
+        fwrite(orig, 1, (size_t)(last_content - orig + 1), out);
+        if (need_comma) fputc(',', out);
+        fprintf(out, "\n  \"dependencies\": {\n    \"%s\": \"%s\"\n  }\n}\n", pkg_path, hash);
+    } else {
+        write_updated_obj(out, orig, dep_obj_open, dep_obj_close, pkg_path, hash);
+    }
+
+    fclose(out);
+    free(orig);
+    return 0;
+}
+
+static int update_bowie_lock(const char *pkg_path, const char *hash) {
+    /* Read existing lock file silently (it may not exist yet) */
+    char *orig = NULL;
+    {
+        FILE *rf = fopen("bowie.lock", "rb");
+        if (rf) {
+            fseek(rf, 0, SEEK_END); long sz = ftell(rf); fseek(rf, 0, SEEK_SET);
+            orig = malloc(sz + 1);
+            if (orig) { size_t n = fread(orig, 1, sz, rf); orig[n] = '\0'; }
+            fclose(rf);
+        }
+    }
+
+    if (orig) {
+        const char *p = json_skip_ws(orig);
+        if (*p == '{') {
+            /* Find closing '}' of the flat object */
+            const char *obj_open = p;
+            int depth = 1; p++;
+            while (*p && depth > 0) {
+                if (*p == '"') { char *s = json_parse_string(&p); free(s); continue; }
+                if (*p == '{') depth++;
+                if (*p == '}') { depth--; if (depth == 0) break; }
+                p++;
+            }
+            const char *obj_close = p;
+
+            /* Skip write if already up to date */
+            char *existing = json_obj_get(obj_open, obj_close, pkg_path);
+            if (existing) {
+                int unchanged = (strcmp(existing, hash) == 0);
+                free(existing);
+                if (unchanged) { free(orig); return 0; }
+            }
+
+            /* Need to update: open for writing only now */
+            FILE *out = fopen("bowie.lock", "w");
+            if (!out) { free(orig); fprintf(stderr, "bowie: cannot write bowie.lock\n"); return -1; }
+            write_updated_obj(out, orig, obj_open, obj_close, pkg_path, hash);
+            fclose(out);
+            free(orig);
+            return 0;
+        }
+        free(orig);
+        /* Malformed — fall through to overwrite */
+    }
+
+    /* No file or malformed: create fresh */
+    FILE *out = fopen("bowie.lock", "w");
+    if (!out) { fprintf(stderr, "bowie: cannot write bowie.lock\n"); return -1; }
+    fprintf(out, "{\n  \"%s\": \"%s\"\n}\n", pkg_path, hash);
+    fclose(out);
+    return 0;
+}
+
+static int cmd_install(const char *pkg_path) {
+    if (!is_valid_pkg_path(pkg_path)) {
+        fprintf(stderr, "bowie: invalid package path '%s'\n"
+                        "       expected format: github.com/owner/repo\n", pkg_path);
+        return 1;
+    }
+
+    char clone_url[4096];
+    snprintf(clone_url, sizeof(clone_url), "https://%s", pkg_path);
+
+    char local_path[4096];
+    snprintf(local_path, sizeof(local_path), "bowie_modules/%s", pkg_path);
+
+    /* mkdir -p the parent directory */
+    char parent_dir[4096];
+    strncpy(parent_dir, local_path, sizeof(parent_dir) - 1);
+    parent_dir[sizeof(parent_dir) - 1] = '\0';
+    char *last_slash = strrchr(parent_dir, '/');
+    if (last_slash) *last_slash = '\0';
+    if (mkdir_p(parent_dir) != 0) {
+        fprintf(stderr, "bowie: cannot create directory '%s': %s\n", parent_dir, strerror(errno));
+        return 1;
+    }
+
+    struct stat st;
+    int already_exists = (stat(local_path, &st) == 0 && S_ISDIR(st.st_mode));
+
+    if (!already_exists) {
+        char git_cmd[8192];
+        snprintf(git_cmd, sizeof(git_cmd), "git clone \"%s\" \"%s\"", clone_url, local_path);
+        printf("bowie: cloning %s ...\n", pkg_path);
+        fflush(stdout);
+        int ret = system(git_cmd);
+        if (ret == -1 || WEXITSTATUS(ret) != 0) {
+            fprintf(stderr, "bowie: git clone failed for '%s'\n", pkg_path);
+            return 1;
+        }
+    } else {
+        printf("bowie: %s already cloned, updating lock info\n", pkg_path);
+    }
+
+    char *hash = get_commit_hash(local_path);
+    if (!hash) {
+        fprintf(stderr, "bowie: could not determine commit hash for '%s'\n", local_path);
+        return 1;
+    }
+
+    if (update_bowie_json(pkg_path, hash) != 0) { free(hash); return 1; }
+    if (update_bowie_lock(pkg_path, hash) != 0)  { free(hash); return 1; }
+
+    printf("bowie: installed %s @ %s\n", pkg_path, hash);
+    free(hash);
+    return 0;
+}
+
+#endif /* !_WIN32 */
+
 int main(int argc, char *argv[]) {
     /* Pre-pass: extract --env-file <path> from anywhere in argv */
     char *filtered[argc];
@@ -447,6 +827,16 @@ int main(int argc, char *argv[]) {
         return cmd_run(argv[2]);
     }
 
-    fprintf(stderr, "Usage: bowie [script.bow]\n       bowie run <task>\n       bowie [--env-file <path>] ...\n");
+#ifndef _WIN32
+    if (argc == 3 && strcmp(argv[1], "install") == 0) {
+        return cmd_install(argv[2]);
+    }
+#endif
+
+    fprintf(stderr,
+            "Usage: bowie [script.bow]\n"
+            "       bowie run <task>\n"
+            "       bowie install <package>\n"
+            "       bowie [--env-file <path>] ...\n");
     return 1;
 }
