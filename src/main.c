@@ -8,6 +8,7 @@
 #include "interpreter.h"
 #include "builtins.h"
 #ifndef _WIN32
+#include <sys/wait.h>
 #include "event_loop.h"
 #endif
 
@@ -191,6 +192,154 @@ static void repl(void) {
     printf("\nBye!\n");
 }
 
+/* Skip whitespace in JSON text */
+static const char *json_skip_ws(const char *p) {
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    return p;
+}
+
+/* Parse a JSON string, returning a malloc'd copy of the contents.
+   On entry *p points at the opening '"'; on exit *p points past the closing '"'. */
+static char *json_parse_string(const char **p) {
+    if (**p != '"') return NULL;
+    (*p)++;
+    const char *start = *p;
+    size_t len = 0;
+    /* first pass: measure */
+    const char *q = start;
+    while (*q && *q != '"') {
+        if (*q == '\\') { q++; if (*q) q++; }
+        else q++;
+        len++;
+    }
+    if (*q != '"') return NULL;
+    char *out = malloc(len + 1);
+    if (!out) return NULL;
+    size_t i = 0;
+    while (*start != '"') {
+        if (*start == '\\') {
+            start++;
+            switch (*start) {
+                case '"':  out[i++] = '"';  break;
+                case '\\': out[i++] = '\\'; break;
+                case '/':  out[i++] = '/';  break;
+                case 'n':  out[i++] = '\n'; break;
+                case 'r':  out[i++] = '\r'; break;
+                case 't':  out[i++] = '\t'; break;
+                default:   out[i++] = *start; break;
+            }
+            start++;
+        } else {
+            out[i++] = *start++;
+        }
+    }
+    out[i] = '\0';
+    *p = start + 1; /* skip closing '"' */
+    return out;
+}
+
+/* Find a task command in bowie.json for the given task name.
+   Returns a malloc'd string on success, NULL on failure. */
+static char *find_task(const char *json, const char *task_name) {
+    const char *p = json_skip_ws(json);
+    if (*p != '{') return NULL;
+    p++;
+
+    /* Walk top-level keys to find "tasks" */
+    while (1) {
+        p = json_skip_ws(p);
+        if (*p == '}' || *p == '\0') break;
+        if (*p != '"') return NULL;
+        char *key = json_parse_string(&p);
+        if (!key) return NULL;
+        p = json_skip_ws(p);
+        if (*p != ':') { free(key); return NULL; }
+        p++;
+        p = json_skip_ws(p);
+
+        int is_tasks = strcmp(key, "tasks") == 0;
+        free(key);
+
+        if (is_tasks) {
+            /* Parse the tasks object */
+            if (*p != '{') return NULL;
+            p++;
+            while (1) {
+                p = json_skip_ws(p);
+                if (*p == '}' || *p == '\0') break;
+                if (*p != '"') return NULL;
+                char *tkey = json_parse_string(&p);
+                if (!tkey) return NULL;
+                p = json_skip_ws(p);
+                if (*p != ':') { free(tkey); return NULL; }
+                p++;
+                p = json_skip_ws(p);
+                if (*p != '"') { free(tkey); return NULL; }
+                char *tval = json_parse_string(&p);
+                if (!tval) { free(tkey); return NULL; }
+
+                if (strcmp(tkey, task_name) == 0) {
+                    free(tkey);
+                    return tval;
+                }
+                free(tkey);
+                free(tval);
+
+                p = json_skip_ws(p);
+                if (*p == ',') p++;
+            }
+            return NULL; /* task not found */
+        }
+
+        /* Skip the value for non-"tasks" keys */
+        if (*p == '"') {
+            char *v = json_parse_string(&p);
+            free(v);
+        } else if (*p == '{' || *p == '[') {
+            /* Skip nested object/array by counting brackets */
+            char open = *p, close = (*p == '{') ? '}' : ']';
+            int depth = 1;
+            p++;
+            while (*p && depth > 0) {
+                if (*p == '"') { char *s = json_parse_string(&p); free(s); continue; }
+                if (*p == open)  depth++;
+                if (*p == close) depth--;
+                p++;
+            }
+        } else {
+            while (*p && *p != ',' && *p != '}') p++;
+        }
+
+        p = json_skip_ws(p);
+        if (*p == ',') p++;
+    }
+    return NULL;
+}
+
+static int cmd_run(const char *task_name) {
+    char *json = read_file("bowie.json");
+    if (!json) {
+        fprintf(stderr, "bowie: bowie.json not found in current directory\n");
+        return 1;
+    }
+
+    char *cmd = find_task(json, task_name);
+    free(json);
+
+    if (!cmd) {
+        fprintf(stderr, "bowie: task '%s' not found in bowie.json\n", task_name);
+        return 1;
+    }
+
+    int ret = system(cmd);
+    free(cmd);
+#ifdef _WIN32
+    return (ret == -1) ? 1 : ret;
+#else
+    return (ret == -1) ? 1 : WEXITSTATUS(ret);
+#endif
+}
+
 int main(int argc, char *argv[]) {
     if (argc == 1) {
         repl();
@@ -206,7 +355,10 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
+    if (argc == 3 && strcmp(argv[1], "run") == 0) {
+        return cmd_run(argv[2]);
+    }
 
-    fprintf(stderr, "Usage: bowie [script.bow]\n");
+    fprintf(stderr, "Usage: bowie [script.bow]\n       bowie run <task>\n");
     return 1;
 }
