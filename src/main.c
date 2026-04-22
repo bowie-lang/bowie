@@ -192,6 +192,74 @@ static void repl(void) {
     printf("\nBye!\n");
 }
 
+static int load_env_file(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        fprintf(stderr, "bowie: cannot open env file '%s': %s\n", path, strerror(errno));
+        return 0;
+    }
+    char line[4096];
+    while (fgets(line, sizeof(line), f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\0' || *p == '\n' || *p == '\r' || *p == '#') continue;
+        if (strncmp(p, "export", 6) == 0 && (p[6] == ' ' || p[6] == '\t')) {
+            p += 7;
+            while (*p == ' ' || *p == '\t') p++;
+        }
+        char *eq = strchr(p, '=');
+        if (!eq) continue;
+
+        /* key */
+        char *key_end = eq;
+        while (key_end > p && (key_end[-1] == ' ' || key_end[-1] == '\t')) key_end--;
+        size_t key_len = (size_t)(key_end - p);
+        char *key = malloc(key_len + 1);
+        if (!key) { fclose(f); return 0; }
+        memcpy(key, p, key_len);
+        key[key_len] = '\0';
+
+        /* value: trim trailing newline first */
+        char *val = eq + 1;
+        size_t vlen = strlen(val);
+        while (vlen > 0 && (val[vlen - 1] == '\n' || val[vlen - 1] == '\r')) vlen--;
+        val[vlen] = '\0';
+
+        if (val[0] == '"' || val[0] == '\'') {
+            /* quoted value: strip enclosing quotes, handle escaped chars for double-quoted */
+            char q = val[0];
+            val++;
+            vlen--;
+            char *close = NULL;
+            for (size_t i = 0; i < vlen; i++) {
+                if (q == '"' && val[i] == '\\' && i + 1 < vlen) { i++; continue; }
+                if (val[i] == q) { close = val + i; break; }
+            }
+            if (close) *close = '\0';
+        } else {
+            /* unquoted: strip inline comment and trailing whitespace */
+            for (size_t i = 0; i < vlen; i++) {
+                if (val[i] == '#' && (i == 0 || val[i - 1] == ' ' || val[i - 1] == '\t')) {
+                    val[i] = '\0';
+                    vlen = i;
+                    break;
+                }
+            }
+            while (vlen > 0 && (val[vlen - 1] == ' ' || val[vlen - 1] == '\t')) vlen--;
+            val[vlen] = '\0';
+        }
+
+#ifdef _WIN32
+        _putenv_s(key, val);
+#else
+        setenv(key, val, 1);
+#endif
+        free(key);
+    }
+    fclose(f);
+    return 1;
+}
+
 /* Skip whitespace in JSON text */
 static const char *json_skip_ws(const char *p) {
     while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
@@ -341,6 +409,26 @@ static int cmd_run(const char *task_name) {
 }
 
 int main(int argc, char *argv[]) {
+    /* Pre-pass: extract --env-file <path> from anywhere in argv */
+    char *filtered[argc];
+    int fargc = 0;
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "--env-file") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "bowie: --env-file requires a path argument\n");
+                return 1;
+            }
+            if (!load_env_file(argv[i + 1])) return 1;
+            i++;
+        } else if (strncmp(argv[i], "--env-file=", 11) == 0) {
+            if (!load_env_file(argv[i] + 11)) return 1;
+        } else {
+            filtered[fargc++] = argv[i];
+        }
+    }
+    argc = fargc;
+    argv = filtered;
+
     if (argc == 1) {
         repl();
         return 0;
@@ -359,6 +447,6 @@ int main(int argc, char *argv[]) {
         return cmd_run(argv[2]);
     }
 
-    fprintf(stderr, "Usage: bowie [script.bow]\n       bowie run <task>\n");
+    fprintf(stderr, "Usage: bowie [script.bow]\n       bowie run <task>\n       bowie [--env-file <path>] ...\n");
     return 1;
 }
