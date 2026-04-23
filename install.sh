@@ -33,6 +33,29 @@ if [ "$os" = "macos" ] && [ "$arch" = "amd64" ]; then
        Please build from source: https://github.com/$REPO"
 fi
 
+# ── libpq check ───────────────────────────────────────────────────────────────
+libpq_found=0
+if pkg-config --exists libpq 2>/dev/null; then
+  libpq_found=1
+elif [ -f /opt/homebrew/opt/libpq/lib/libpq.5.dylib ]; then
+  libpq_found=1
+elif [ -f /usr/local/opt/libpq/lib/libpq.5.dylib ]; then
+  libpq_found=1
+elif [ -f /usr/lib/x86_64-linux-gnu/libpq.so.5 ]; then
+  libpq_found=1
+elif [ -f /usr/lib/aarch64-linux-gnu/libpq.so.5 ]; then
+  libpq_found=1
+elif ldconfig -p 2>/dev/null | grep -q libpq; then
+  libpq_found=1
+fi
+
+if [ "$libpq_found" = "0" ]; then
+  err "libpq not found. Install it before installing bowie.
+       macOS:  brew install libpq
+       Debian: sudo apt install libpq-dev
+       Fedora: sudo dnf install libpq-devel"
+fi
+
 TARGET="${BINARY}-${os}-${arch}"
 URL="https://github.com/${REPO}/releases/latest/download/${TARGET}"
 
