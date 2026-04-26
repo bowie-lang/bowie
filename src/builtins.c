@@ -948,16 +948,22 @@ static char *indent_str(int n) {
 
 static char *json_encode_string(const char *src) {
     int len = strlen(src);
-    char *out = malloc(len * 2 + 3);
+    char *out = malloc(len * 6 + 3);
     int i = 0, o = 0;
     out[o++] = '"';
     while (src[i]) {
         unsigned char c = src[i++];
         if      (c == '"')  { out[o++] = '\\'; out[o++] = '"';  }
         else if (c == '\\') { out[o++] = '\\'; out[o++] = '\\'; }
+        else if (c == '\b') { out[o++] = '\\'; out[o++] = 'b';  }
+        else if (c == '\f') { out[o++] = '\\'; out[o++] = 'f';  }
         else if (c == '\n') { out[o++] = '\\'; out[o++] = 'n';  }
         else if (c == '\r') { out[o++] = '\\'; out[o++] = 'r';  }
         else if (c == '\t') { out[o++] = '\\'; out[o++] = 't';  }
+        else if (c < 0x20) {
+            snprintf(out + o, 7, "\\u%04x", c);
+            o += 6;
+        }
         else                  out[o++] = c;
     }
     out[o++] = '"';
@@ -973,6 +979,7 @@ static char *json_encode_obj(Object *o, int indent, int depth) {
             snprintf(buf, sizeof(buf), "%lld", o->int_val);
             return strdup(buf);
         case OBJ_FLOAT:
+            if (!isfinite(o->float_val)) return strdup("null");
             snprintf(buf, sizeof(buf), "%g", o->float_val);
             return strdup(buf);
         case OBJ_BOOL:
@@ -1047,7 +1054,12 @@ static Object *bw_json_encode(ObjList *args) {
 }
 
 /* Simple recursive descent JSON decoder */
-typedef struct { const char *src; int pos; } JD;
+typedef struct {
+    const char *src;
+    int pos;
+    int err_pos;
+    char err[160];
+} JD;
 
 static void jd_skip_ws(JD *j) {
     while (j->src[j->pos] && isspace((unsigned char)j->src[j->pos])) j->pos++;
@@ -1055,25 +1067,66 @@ static void jd_skip_ws(JD *j) {
 
 static Object *jd_parse_value(JD *j);
 
+static Object *jd_fail(JD *j, const char *msg) {
+    if (!j->err[0]) {
+        j->err_pos = j->pos;
+        snprintf(j->err, sizeof(j->err), "%s", msg);
+    }
+    return NULL;
+}
+
+static int jd_hex4(const char *s) {
+    for (int i = 0; i < 4; i++) {
+        if (!isxdigit((unsigned char)s[i])) return 0;
+    }
+    return 1;
+}
+
 static Object *jd_parse_string(JD *j) {
+    if (j->src[j->pos] != '"') return jd_fail(j, "expected string");
     j->pos++; /* skip " */
     int   cap = 64, len = 0;
     char *buf = malloc(cap);
     while (j->src[j->pos] && j->src[j->pos] != '"') {
         char c = j->src[j->pos++];
+        if ((unsigned char)c < 0x20) {
+            free(buf);
+            return jd_fail(j, "unescaped control character in string");
+        }
         if (c == '\\') {
+            if (!j->src[j->pos]) {
+                free(buf);
+                return jd_fail(j, "unterminated escape");
+            }
             char e = j->src[j->pos++];
             switch (e) {
                 case '"': c='"'; break; case '\\': c='\\'; break;
+                case '/': c='/'; break; case 'b': c='\b'; break;
+                case 'f': c='\f'; break;
                 case 'n': c='\n'; break; case 't': c='\t'; break;
                 case 'r': c='\r'; break; default: c=e; break;
+                case 'u':
+                    if (!jd_hex4(j->src + j->pos)) {
+                        free(buf);
+                        return jd_fail(j, "invalid unicode escape");
+                    }
+                    /* Keep UTF-16 escapes in a stable textual form for now. */
+                    if (len + 6 >= cap) { while (len + 6 >= cap) cap *= 2; buf = realloc(buf, cap); }
+                    buf[len++] = '\\'; buf[len++] = 'u';
+                    for (int i = 0; i < 4; i++) buf[len++] = j->src[j->pos + i];
+                    j->pos += 4;
+                    continue;
             }
         }
         if (len + 2 >= cap) { cap *= 2; buf = realloc(buf, cap); }
         buf[len++] = c;
     }
+    if (j->src[j->pos] != '"') {
+        free(buf);
+        return jd_fail(j, "unterminated string");
+    }
     buf[len] = '\0';
-    if (j->src[j->pos] == '"') j->pos++;
+    j->pos++;
     Object *o = obj_string(buf); free(buf); return o;
 }
 
@@ -1081,11 +1134,19 @@ static Object *jd_parse_number(JD *j) {
     int start = j->pos;
     int is_f  = 0;
     if (j->src[j->pos] == '-') j->pos++;
-    while (isdigit((unsigned char)j->src[j->pos])) j->pos++;
+    if (!isdigit((unsigned char)j->src[j->pos])) return jd_fail(j, "invalid number");
+    if (j->src[j->pos] == '0') {
+        j->pos++;
+        if (isdigit((unsigned char)j->src[j->pos])) return jd_fail(j, "leading zero in number");
+    } else {
+        while (isdigit((unsigned char)j->src[j->pos])) j->pos++;
+    }
     if (j->src[j->pos] == '.') { is_f = 1; j->pos++; while (isdigit((unsigned char)j->src[j->pos])) j->pos++; }
+    if (j->src[j->pos - 1] == '.') return jd_fail(j, "invalid fractional number");
     if (j->src[j->pos] == 'e' || j->src[j->pos] == 'E') {
         is_f = 1; j->pos++;
         if (j->src[j->pos] == '+' || j->src[j->pos] == '-') j->pos++;
+        if (!isdigit((unsigned char)j->src[j->pos])) return jd_fail(j, "invalid exponent");
         while (isdigit((unsigned char)j->src[j->pos])) j->pos++;
     }
     int   len = j->pos - start;
@@ -1099,15 +1160,20 @@ static Object *jd_parse_array(JD *j) {
     j->pos++; /* skip [ */
     Object *arr = obj_array();
     jd_skip_ws(j);
+    if (j->src[j->pos] == ']') { j->pos++; return arr; }
     while (j->src[j->pos] && j->src[j->pos] != ']') {
         Object *v = jd_parse_value(j);
-        if (!v) break;
+        if (!v) { obj_release(arr); return NULL; }
         array_push(arr, v); obj_release(v);
         jd_skip_ws(j);
-        if (j->src[j->pos] == ',') j->pos++;
+        if (j->src[j->pos] == ',') { j->pos++; jd_skip_ws(j); continue; }
+        if (j->src[j->pos] == ']') break;
+        obj_release(arr);
+        return jd_fail(j, "expected ',' or ']'");
         jd_skip_ws(j);
     }
     if (j->src[j->pos] == ']') j->pos++;
+    else { obj_release(arr); return jd_fail(j, "unterminated array"); }
     return arr;
 }
 
@@ -1115,21 +1181,37 @@ static Object *jd_parse_object(JD *j) {
     j->pos++; /* skip { */
     Object *h = obj_hash();
     jd_skip_ws(j);
+    if (j->src[j->pos] == '}') { j->pos++; return h; }
     while (j->src[j->pos] && j->src[j->pos] != '}') {
         jd_skip_ws(j);
-        if (j->src[j->pos] != '"') break;
+        if (j->src[j->pos] != '"') { obj_release(h); return jd_fail(j, "expected string key"); }
         Object *k = jd_parse_string(j);
+        if (!k) { obj_release(h); return NULL; }
         jd_skip_ws(j);
-        if (j->src[j->pos] == ':') j->pos++;
+        if (j->src[j->pos] != ':') {
+            obj_release(k);
+            obj_release(h);
+            return jd_fail(j, "expected ':' after object key");
+        }
+        j->pos++;
         jd_skip_ws(j);
         Object *v = jd_parse_value(j);
-        if (k && v) hash_set(h, k->string.str, v);
+        if (!v) {
+            obj_release(k);
+            obj_release(h);
+            return NULL;
+        }
+        hash_set(h, k->string.str, v);
         obj_release(k); obj_release(v);
         jd_skip_ws(j);
-        if (j->src[j->pos] == ',') j->pos++;
+        if (j->src[j->pos] == ',') { j->pos++; jd_skip_ws(j); continue; }
+        if (j->src[j->pos] == '}') break;
+        obj_release(h);
+        return jd_fail(j, "expected ',' or '}'");
         jd_skip_ws(j);
     }
     if (j->src[j->pos] == '}') j->pos++;
+    else { obj_release(h); return jd_fail(j, "unterminated object"); }
     return h;
 }
 
@@ -1143,15 +1225,175 @@ static Object *jd_parse_value(JD *j) {
     if (strncmp(j->src + j->pos, "true",  4) == 0) { j->pos += 4; return obj_bool(1); }
     if (strncmp(j->src + j->pos, "false", 5) == 0) { j->pos += 5; return obj_bool(0); }
     if (strncmp(j->src + j->pos, "null",  4) == 0) { j->pos += 4; return obj_null(); }
-    return NULL;
+    return jd_fail(j, "unexpected token");
+}
+
+static Object *bw_json_try_decode(ObjList *args) {
+    REQUIRE(1, "json_try_decode");
+    if (ARG(0)->type != OBJ_STRING) {
+        return obj_error_typef("TypeMismatchError", "json_try_decode(): requires string");
+    }
+    JD j = { ARG(0)->string.str, 0, -1, {0} };
+    Object *value = jd_parse_value(&j);
+    if (value) {
+        jd_skip_ws(&j);
+        if (j.src[j.pos] != '\0') {
+            obj_release(value);
+            value = NULL;
+            jd_fail(&j, "trailing characters after JSON value");
+        }
+    } else if (!j.err[0]) {
+        jd_fail(&j, "invalid JSON");
+    }
+
+    Object *out = obj_hash();
+    if (value) {
+        hash_set(out, "ok", obj_bool(1));
+        hash_set(out, "value", value);
+        obj_release(value);
+    } else {
+        hash_set(out, "ok", obj_bool(0));
+        hash_set(out, "error", obj_string(j.err[0] ? j.err : "invalid JSON"));
+        hash_set(out, "pos", obj_int(j.err_pos >= 0 ? j.err_pos : j.pos));
+    }
+    return out;
 }
 
 static Object *bw_json_decode(ObjList *args) {
     REQUIRE(1, "json_decode");
     if (ARG(0)->type != OBJ_STRING) return obj_error_typef("TypeMismatchError", "json_decode(): requires string");
-    JD j = { ARG(0)->string.str, 0 };
+    JD j = { ARG(0)->string.str, 0, -1, {0} };
     Object *o = jd_parse_value(&j);
-    return o ? o : obj_error_typef("JsonError", "json_decode(): invalid JSON");
+    if (o) {
+        jd_skip_ws(&j);
+        if (j.src[j.pos] == '\0') return o;
+        obj_release(o);
+        o = NULL;
+        jd_fail(&j, "trailing characters after JSON value");
+    }
+    return obj_error_typef("JsonError", "json_decode(): %s at byte %d",
+                           j.err[0] ? j.err : "invalid JSON",
+                           j.err_pos >= 0 ? j.err_pos : j.pos);
+}
+
+static int bow_starts_with_ci(const char *s, const char *prefix) {
+    if (!s || !prefix) return 0;
+    while (*prefix && *s) {
+        if (tolower((unsigned char)*s) != tolower((unsigned char)*prefix)) return 0;
+        s++;
+        prefix++;
+    }
+    return *prefix == '\0';
+}
+
+static Object *bw_req_json(ObjList *args) {
+    REQUIRE(1, "req_json");
+    if (ARG(0)->type != OBJ_HASH) {
+        return obj_error_typef("TypeMismatchError", "req_json(): requires request hash");
+    }
+    Object *headers = hash_get(ARG(0), "headers");
+    if (headers == BOWIE_NULL || headers->type != OBJ_HASH) {
+        return obj_error_typef("BadRequestError", "req_json(): request headers missing");
+    }
+    Object *ctype = hash_get(headers, "content-type");
+    if (ctype == BOWIE_NULL || ctype->type != OBJ_STRING ||
+        !bow_starts_with_ci(ctype->string.str, "application/json")) {
+        return obj_error_typef("BadRequestError", "req_json(): expected Content-Type application/json");
+    }
+    Object *body = hash_get(ARG(0), "body");
+    if (body == BOWIE_NULL || body->type != OBJ_STRING) {
+        return obj_error_typef("BadRequestError", "req_json(): request body must be string");
+    }
+    JD j = { body->string.str, 0, -1, {0} };
+    Object *parsed = jd_parse_value(&j);
+    if (parsed) {
+        jd_skip_ws(&j);
+        if (j.src[j.pos] == '\0') return parsed;
+        obj_release(parsed);
+        parsed = NULL;
+        jd_fail(&j, "trailing characters after JSON value");
+    }
+    return obj_error_typef("JsonError", "req_json(): %s at byte %d",
+                           j.err[0] ? j.err : "invalid JSON",
+                           j.err_pos >= 0 ? j.err_pos : j.pos);
+}
+
+static Object *bw_json_response(ObjList *args) {
+    REQUIRE(1, "json_response");
+    int status = 200;
+    int pretty = 0;
+    Object *headers_src = BOWIE_NULL;
+    Object *opts = BOWIE_NULL;
+
+    if (NARGS >= 2) {
+        if (ARG(1)->type == OBJ_INT) {
+            status = (int)ARG(1)->int_val;
+        } else if (ARG(1)->type == OBJ_HASH) {
+            /* Backward compatible: json_response(body, headers) */
+            headers_src = ARG(1);
+        } else if (ARG(1) != BOWIE_NULL) {
+            return obj_error_typef("TypeMismatchError", "json_response(): arg2 must be int status or hash");
+        }
+    }
+
+    if (NARGS >= 3) {
+        if (ARG(2)->type != OBJ_HASH) {
+            return obj_error_typef("TypeMismatchError", "json_response(): arg3 must be hash");
+        }
+        /* If pretty/headers keys exist, treat as options; else legacy headers. */
+        Object *opt_pretty  = hash_get(ARG(2), "pretty");
+        Object *opt_headers = hash_get(ARG(2), "headers");
+        if (opt_pretty != BOWIE_NULL || opt_headers != BOWIE_NULL) opts = ARG(2);
+        else headers_src = ARG(2);
+    }
+
+    if (NARGS >= 4) {
+        if (ARG(3)->type != OBJ_HASH) {
+            return obj_error_typef("TypeMismatchError", "json_response(): arg4 options must be hash");
+        }
+        opts = ARG(3);
+    }
+
+    if (opts != BOWIE_NULL) {
+        Object *opt_pretty = hash_get(opts, "pretty");
+        pretty = (opt_pretty != BOWIE_NULL) && obj_is_truthy(opt_pretty);
+        Object *opt_headers = hash_get(opts, "headers");
+        if (opt_headers != BOWIE_NULL) {
+            if (opt_headers->type != OBJ_HASH) {
+                return obj_error_typef("TypeMismatchError", "json_response(): options.headers must be hash");
+            }
+            headers_src = opt_headers;
+        }
+    }
+
+    const char *body_str = NULL;
+    char *body_owned = NULL;
+    if (ARG(0)->type == OBJ_STRING) {
+        body_str = ARG(0)->string.str;
+    } else {
+        body_owned = json_encode_obj(ARG(0), pretty, 0);
+        body_str = body_owned;
+    }
+
+    Object *resp = obj_hash();
+    Object *headers = obj_hash();
+    if (headers_src != BOWIE_NULL) {
+        for (int i = 0; i < 64; i++) {
+            HashEntry *e = headers_src->hash.buckets[i];
+            while (e) {
+                hash_set(headers, e->key, e->value);
+                e = e->next;
+            }
+        }
+    }
+    hash_set(headers, "Content-Type", obj_string("application/json"));
+
+    hash_set(resp, "status", obj_int(status));
+    hash_set(resp, "headers", headers);
+    hash_set(resp, "body", obj_string(body_str ? body_str : ""));
+    obj_release(headers);
+    free(body_owned);
+    return resp;
 }
 
 /* ---- HTTP Server builtins ---- */
@@ -1461,7 +1703,10 @@ void builtins_register(Env *env) {
 
     /* JSON */
     REG("json_encode", bw_json_encode);
+    REG("json_try_decode", bw_json_try_decode);
     REG("json_decode", bw_json_decode);
+    REG("req_json", bw_req_json);
+    REG("json_response", bw_json_response);
 
     /* HTTP */
     REG("fetch",          bw_fetch);

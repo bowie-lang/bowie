@@ -154,7 +154,15 @@ static Node *parse_hash_lit(Parser *p) {
     advance(p); /* skip { */
     while (!cur_is(p, TOK_RBRACE) && !cur_is(p, TOK_EOF)) {
         if (p->error) break;
-        Node *key = parse_expr(p, PREC_NONE);
+        Node *key = NULL;
+        if (cur_is(p, TOK_IDENT) && p->peek.type == TOK_COLON) {
+            /* Support JS-style object literal keys: {pretty: true} */
+            key = node_new(NODE_STRING, p->cur.line);
+            key->string.value = strdup(p->cur.value);
+            advance(p);
+        } else {
+            key = parse_expr(p, PREC_NONE);
+        }
         if (!key) break;
         if (!expect(p, TOK_COLON)) { node_free(key); break; }
         Node *val = parse_expr(p, PREC_NONE);
