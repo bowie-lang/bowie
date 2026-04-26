@@ -447,8 +447,12 @@ void http_serve(Object *server, Interpreter *it, Env *env) {
     server->server.fd = fd4;
 
 #ifndef _WIN32
-    signal(SIGINT, http_sig_handler);
-    signal(SIGTERM, http_sig_handler);
+    struct sigaction sa;
+    sa.sa_handler = http_sig_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0; /* no SA_RESTART — let select() return EINTR */
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
 #endif
 
     char *buf = malloc(BUF_SIZE);
