@@ -736,7 +736,14 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
         case NODE_IMPORT: {
             const char *raw = n->import_.path;
             char *aliased = NULL;
-            if (it->project_root && raw[0] == '@' && raw[1] == '/') {
+            if (it->std_path && strncmp(raw, "std/", 4) == 0) {
+                const char *mod_name = raw + 4; /* e.g. "array" */
+                size_t sp_len  = strlen(it->std_path);
+                size_t mn_len  = strlen(mod_name);
+                aliased = malloc(sp_len + mn_len + 6); /* "/" + ".bow" + NUL */
+                snprintf(aliased, sp_len + mn_len + 6, "%s/%s.bow", it->std_path, mod_name);
+                raw = aliased;
+            } else if (it->project_root && raw[0] == '@' && raw[1] == '/') {
                 size_t rlen = strlen(it->project_root);
                 size_t plen = strlen(raw + 1);
                 aliased = malloc(rlen + plen + 1);
@@ -789,7 +796,9 @@ static Object *eval_node(Interpreter *it, Node *n, Env *env) {
                     raw = aliased;
                 }
             }
-            char *resolved = resolve_path(it->current_file, raw);
+            char *resolved = aliased
+                ? resolve_path(NULL, raw)
+                : resolve_path(it->current_file, raw);
             free(aliased);
             Object *mod = interp_load_module(it, resolved);
             free(resolved);
@@ -943,6 +952,7 @@ Interpreter *interp_new(void) {
 
 void interp_free(Interpreter *it) {
     free(it->project_root);
+    free(it->std_path);
     ModCache *c = it->cache;
     while (c) {
         ModCache *next = c->next;

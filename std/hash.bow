@@ -1,0 +1,89 @@
+# std/hash — hash map utilities
+
+export fn merge(a, b) {
+    let result = {}
+    for k in keys(a) {
+        result[k] = a[k]
+    }
+    for k in keys(b) {
+        result[k] = b[k]
+    }
+    return result
+}
+
+export fn pick(h, ks) {
+    let result = {}
+    for k in ks {
+        if index_of(keys(h), k) >= 0 {
+            result[k] = h[k]
+        }
+    }
+    return result
+}
+
+export fn omit(h, ks) {
+    let result = {}
+    for k in keys(h) {
+        let skip = false
+        for ex in ks {
+            if k == ex {
+                skip = true
+            }
+        }
+        if !skip {
+            result[k] = h[k]
+        }
+    }
+    return result
+}
+
+export fn entries(h) {
+    let result = []
+    for k in keys(h) {
+        push(result, [k, h[k]])
+    }
+    return result
+}
+
+export fn from_entries(arr) {
+    let result = {}
+    for pair in arr {
+        result[pair[0]] = pair[1]
+    }
+    return result
+}
+
+export fn map_values(h, f) {
+    let result = {}
+    for k in keys(h) {
+        result[k] = f(h[k])
+    }
+    return result
+}
+
+export fn map_entries(h, f) {
+    let result = {}
+    for k in keys(h) {
+        let pair = f(k, h[k])
+        result[pair[0]] = pair[1]
+    }
+    return result
+}
+
+export fn filter_entries(h, f) {
+    let result = {}
+    for k in keys(h) {
+        if f(k, h[k]) {
+            result[k] = h[k]
+        }
+    }
+    return result
+}
+
+export fn has(h, k) {
+    return index_of(keys(h), k) >= 0
+}
+
+export fn size(h) {
+    return len(keys(h))
+}

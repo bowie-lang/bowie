@@ -13,6 +13,9 @@
 #include <unistd.h>
 #include "event_loop.h"
 #endif
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 /* Declared in builtins.c */
 void builtins_set_interp(Interpreter *it, Env *env);
@@ -23,6 +26,65 @@ static char *dup_cstr(const char *s) {
     if (!copy) return NULL;
     memcpy(copy, s, len);
     return copy;
+}
+
+/* Locate the std library directory.
+ * Priority: $BOWIE_STD env var → sibling "std/" next to binary → "./std" fallback. */
+static char *g_std_path = NULL;
+
+/* A valid std dir must contain array.bow — prevents picking up unrelated "std/" dirs */
+static int is_valid_std(const char *path) {
+    char probe[4096];
+    snprintf(probe, sizeof(probe), "%s/array.bow", path);
+    FILE *f = fopen(probe, "r");
+    if (f) { fclose(f); return 1; }
+    return 0;
+}
+
+static char *self_exe_path(const char *argv0) {
+#ifdef __APPLE__
+    char buf[4096];
+    uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) == 0) {
+        char *real = realpath(buf, NULL);
+        if (real) return real;
+    }
+#elif defined(__linux__)
+    char *real = realpath("/proc/self/exe", NULL);
+    if (real) return real;
+#endif
+    /* fallback: try to resolve argv0 via realpath (works when full path given) */
+    return realpath(argv0, NULL);
+}
+
+static char *find_std_path(const char *argv0) {
+    const char *env_std = getenv("BOWIE_STD");
+    if (env_std && env_std[0]) return dup_cstr(env_std);
+
+#ifndef _WIN32
+    char *bin = self_exe_path(argv0);
+    if (bin) {
+        char *sl = strrchr(bin, '/');
+        if (sl) {
+            *sl = '\0'; /* bin is now the directory containing the binary */
+            char candidate[4096];
+
+            /* 1. {bin_dir}/std — dev layout: binary sits in project root */
+            snprintf(candidate, sizeof(candidate), "%s/std", bin);
+            if (is_valid_std(candidate)) { free(bin); return dup_cstr(candidate); }
+
+            /* 2. {bin_dir}/../lib/bowie/std — installed: /usr/local/bin → /usr/local/lib/bowie/std */
+            snprintf(candidate, sizeof(candidate), "%s/../lib/bowie/std", bin);
+            char *real = realpath(candidate, NULL);
+            if (real) {
+                if (is_valid_std(real)) { free(bin); return real; }
+                free(real);
+            }
+        }
+        free(bin);
+    }
+#endif
+    return NULL; /* not found — ImportError will surface at import time */
 }
 
 /* stdin is not seekable; avoid fseek/ftell (can hang or mis-size). */
@@ -130,6 +192,7 @@ static void run_source(const char *source, const char *filename) {
         if (!interp->project_root) interp->project_root = dup_cstr(".");
     }
 
+    interp->std_path = g_std_path ? dup_cstr(g_std_path) : dup_cstr("std");
     builtins_set_interp(interp, interp->globals);
 
 #ifndef _WIN32
@@ -168,6 +231,7 @@ static void repl(void) {
     printf("Bowie REPL (type 'exit()' to quit)\n");
 
     Interpreter *interp = interp_new();
+    interp->std_path = g_std_path ? dup_cstr(g_std_path) : dup_cstr("std");
     builtins_set_interp(interp, interp->globals);
 
     char line[4096];
@@ -789,6 +853,8 @@ static int cmd_install(const char *pkg_path) {
 #endif /* !_WIN32 */
 
 int main(int argc, char *argv[]) {
+    g_std_path = find_std_path(argc > 0 ? argv[0] : "bowie");
+
     /* Pre-pass: extract --env-file <path> and handle --help/-h from anywhere in argv */
     char *filtered[argc];
     int fargc = 0;

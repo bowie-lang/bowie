@@ -1,0 +1,100 @@
+# std/string — string utilities
+
+export fn pad_left(s, width, ch) {
+    if is_null(ch) {
+        ch = " "
+    }
+    let result = s
+    while len(result) < width {
+        result = ch + result
+    }
+    return result
+}
+
+export fn pad_right(s, width, ch) {
+    if is_null(ch) {
+        ch = " "
+    }
+    let result = s
+    while len(result) < width {
+        result = result + ch
+    }
+    return result
+}
+
+export fn repeat(s, n) {
+    let result = ""
+    let i = 0
+    while i < n {
+        result = result + s
+        i = i + 1
+    }
+    return result
+}
+
+export fn truncate(s, max_len, suffix) {
+    if is_null(suffix) {
+        suffix = "..."
+    }
+    if len(s) <= max_len {
+        return s
+    }
+    let cut = max_len - len(suffix)
+    if cut < 0 {
+        cut = 0
+    }
+    return slice(s, 0, cut) + suffix
+}
+
+export fn lines(s) {
+    return split(s, "\n")
+}
+
+export fn words(s) {
+    let parts = split(trim(s), " ")
+    let result = []
+    for p in parts {
+        if len(trim(p)) > 0 {
+            push(result, p)
+        }
+    }
+    return result
+}
+
+export fn capitalize(s) {
+    if len(s) == 0 {
+        return s
+    }
+    return upper(slice(s, 0, 1)) + slice(s, 1, len(s))
+}
+
+export fn title_case(s) {
+    let ws = words(s)
+    let result = []
+    for w in ws {
+        push(result, capitalize(w))
+    }
+    return join(result, " ")
+}
+
+export fn count_chars(s, ch) {
+    let parts = split(s, ch)
+    return len(parts) - 1
+}
+
+export fn is_blank(s) {
+    return len(trim(s)) == 0
+}
+
+export fn indent(s, spaces) {
+    if is_null(spaces) {
+        spaces = 2
+    }
+    let prefix = repeat(" ", spaces)
+    let ls = lines(s)
+    let result = []
+    for l in ls {
+        push(result, prefix + l)
+    }
+    return join(result, "\n")
+}

@@ -1,0 +1,87 @@
+# std/math — math utilities
+
+export fn clamp(val, lo, hi) {
+    if val < lo { return lo }
+    if val > hi { return hi }
+    return val
+}
+
+export fn lerp(a, b, t) {
+    return a + (b - a) * t
+}
+
+export fn round_to(n, decimals) {
+    let factor = pow(10, decimals)
+    return floor(n * factor + 0.5) / factor
+}
+
+export fn sum(arr) {
+    let total = 0
+    for x in arr {
+        total = total + x
+    }
+    return total
+}
+
+export fn product(arr) {
+    let total = 1
+    for x in arr {
+        total = total * x
+    }
+    return total
+}
+
+export fn mean(arr) {
+    if len(arr) == 0 { return 0 }
+    let total = 0
+    for x in arr {
+        total = total + x
+    }
+    return total / len(arr)
+}
+
+export fn median(arr) {
+    if len(arr) == 0 { return 0 }
+    let sorted = []
+    for x in arr { push(sorted, x) }
+    let n = len(sorted)
+    let i = 1
+    while i < n {
+        let val = sorted[i]
+        let j = i - 1
+        while j >= 0 && sorted[j] > val {
+            sorted[j + 1] = sorted[j]
+            j = j - 1
+        }
+        sorted[j + 1] = val
+        i = i + 1
+    }
+    let mid = n / 2
+    if n % 2 == 0 {
+        return (sorted[mid - 1] + sorted[mid]) / 2
+    }
+    return sorted[mid]
+}
+
+export fn sign(n) {
+    if n > 0 { return 1 }
+    if n < 0 { return -1 }
+    return 0
+}
+
+export fn digits(n) {
+    if n == 0 { return [0] }
+    let result = []
+    n = abs(n)
+    while n > 0 {
+        push(result, n % 10)
+        n = floor(n / 10)
+    }
+    let reversed = []
+    let i = len(result) - 1
+    while i >= 0 {
+        push(reversed, result[i])
+        i = i - 1
+    }
+    return reversed
+}

@@ -2,6 +2,7 @@
 #include "http.h"
 #include "interpreter.h"
 #include "mustache.h"
+#include <time.h>
 #ifndef _WIN32
 #include "coro.h"
 #include "event_loop.h"
@@ -1287,6 +1288,77 @@ static Object *bw_is_null(ObjList *args) {
     return obj_bool(ARG(0)->type == OBJ_NULL);
 }
 
+/* ---- Date / time ---- */
+static Object *bw_time_now(ObjList *args) {
+    (void)args;
+    return obj_int((long long)time(NULL));
+}
+
+static Object *bw_time_format(ObjList *args) {
+    REQUIRE(2, "time_format");
+    if (ARG(0)->type != OBJ_INT)
+        return obj_error_typef("TypeMismatchError", "time_format(): arg 1 must be int timestamp");
+    if (ARG(1)->type != OBJ_STRING)
+        return obj_error_typef("TypeMismatchError", "time_format(): arg 2 must be string format");
+    time_t ts = (time_t)ARG(0)->int_val;
+    struct tm *t = localtime(&ts);
+    char buf[256];
+    strftime(buf, sizeof(buf), ARG(1)->string.str, t);
+    return obj_string(buf);
+}
+
+static Object *bw_time_parts(ObjList *args) {
+    REQUIRE(1, "time_parts");
+    if (ARG(0)->type != OBJ_INT)
+        return obj_error_typef("TypeMismatchError", "time_parts(): requires int timestamp");
+    time_t ts = (time_t)ARG(0)->int_val;
+    struct tm *t = localtime(&ts);
+    Object *h = obj_hash();
+    hash_set(h, "year",    obj_int(t->tm_year + 1900));
+    hash_set(h, "month",   obj_int(t->tm_mon + 1));
+    hash_set(h, "day",     obj_int(t->tm_mday));
+    hash_set(h, "hour",    obj_int(t->tm_hour));
+    hash_set(h, "minute",  obj_int(t->tm_min));
+    hash_set(h, "second",  obj_int(t->tm_sec));
+    hash_set(h, "weekday", obj_int(t->tm_wday));
+    hash_set(h, "yday",    obj_int(t->tm_yday + 1));
+    return h;
+}
+
+static Object *bw_time_utc_parts(ObjList *args) {
+    REQUIRE(1, "time_utc_parts");
+    if (ARG(0)->type != OBJ_INT)
+        return obj_error_typef("TypeMismatchError", "time_utc_parts(): requires int timestamp");
+    time_t ts = (time_t)ARG(0)->int_val;
+    struct tm *t = gmtime(&ts);
+    Object *h = obj_hash();
+    hash_set(h, "year",    obj_int(t->tm_year + 1900));
+    hash_set(h, "month",   obj_int(t->tm_mon + 1));
+    hash_set(h, "day",     obj_int(t->tm_mday));
+    hash_set(h, "hour",    obj_int(t->tm_hour));
+    hash_set(h, "minute",  obj_int(t->tm_min));
+    hash_set(h, "second",  obj_int(t->tm_sec));
+    hash_set(h, "weekday", obj_int(t->tm_wday));
+    hash_set(h, "yday",    obj_int(t->tm_yday + 1));
+    return h;
+}
+
+static Object *bw_time_make(ObjList *args) {
+    REQUIRE(3, "time_make");
+    struct tm t = {0};
+    t.tm_year  = (int)ARG(0)->int_val - 1900;
+    t.tm_mon   = (int)ARG(1)->int_val - 1;
+    t.tm_mday  = (int)ARG(2)->int_val;
+    t.tm_hour  = (NARGS > 3 && ARG(3)->type == OBJ_INT) ? (int)ARG(3)->int_val : 0;
+    t.tm_min   = (NARGS > 4 && ARG(4)->type == OBJ_INT) ? (int)ARG(4)->int_val : 0;
+    t.tm_sec   = (NARGS > 5 && ARG(5)->type == OBJ_INT) ? (int)ARG(5)->int_val : 0;
+    t.tm_isdst = -1;
+    time_t ts = mktime(&t);
+    if (ts == (time_t)-1)
+        return obj_error_typef("ValueError", "time_make(): invalid date");
+    return obj_int((long long)ts);
+}
+
 /* ---- Mustache templates ---- */
 static Object *bw_render_template(ObjList *args) {
     REQUIRE(2, "render_template");
@@ -1408,4 +1480,11 @@ void builtins_register(Env *env) {
     /* Templates */
     REG("render_template", bw_render_template);
     REG("render_file",     bw_render_file);
+
+    /* Date / time */
+    REG("time_now",       bw_time_now);
+    REG("time_format",    bw_time_format);
+    REG("time_parts",     bw_time_parts);
+    REG("time_utc_parts", bw_time_utc_parts);
+    REG("time_make",      bw_time_make);
 }

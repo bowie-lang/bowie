@@ -1,0 +1,212 @@
+# std/array — functional array utilities
+
+export fn map(arr, f) {
+    let result = []
+    for item in arr {
+        push(result, f(item))
+    }
+    return result
+}
+
+export fn filter(arr, f) {
+    let result = []
+    for item in arr {
+        if f(item) {
+            push(result, item)
+        }
+    }
+    return result
+}
+
+export fn reduce(arr, f, acc) {
+    for item in arr {
+        acc = f(acc, item)
+    }
+    return acc
+}
+
+export fn find(arr, f) {
+    for item in arr {
+        if f(item) {
+            return item
+        }
+    }
+    return null
+}
+
+export fn find_index(arr, f) {
+    let i = 0
+    while i < len(arr) {
+        if f(arr[i]) {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+export fn every(arr, f) {
+    for item in arr {
+        if !f(item) {
+            return false
+        }
+    }
+    return true
+}
+
+export fn some(arr, f) {
+    for item in arr {
+        if f(item) {
+            return true
+        }
+    }
+    return false
+}
+
+export fn count(arr, f) {
+    let n = 0
+    for item in arr {
+        if f(item) {
+            n = n + 1
+        }
+    }
+    return n
+}
+
+export fn flat(arr) {
+    let result = []
+    for item in arr {
+        if type(item) == "array" {
+            for inner in item {
+                push(result, inner)
+            }
+        } else {
+            push(result, item)
+        }
+    }
+    return result
+}
+
+export fn flat_map(arr, f) {
+    return flat(map(arr, f))
+}
+
+export fn zip(a, b) {
+    let result = []
+    let n = len(a)
+    if len(b) < n {
+        n = len(b)
+    }
+    let i = 0
+    while i < n {
+        push(result, [a[i], b[i]])
+        i = i + 1
+    }
+    return result
+}
+
+export fn unique(arr) {
+    let seen = {}
+    let result = []
+    for item in arr {
+        let key = str(item)
+        if index_of(keys(seen), key) < 0 {
+            seen[key] = true
+            push(result, item)
+        }
+    }
+    return result
+}
+
+export fn compact(arr) {
+    let result = []
+    for item in arr {
+        if !is_null(item) && item != false {
+            push(result, item)
+        }
+    }
+    return result
+}
+
+export fn take(arr, n) {
+    return slice(arr, 0, n)
+}
+
+export fn drop(arr, n) {
+    return slice(arr, n, len(arr))
+}
+
+export fn chunk(arr, n) {
+    let result = []
+    let i = 0
+    let total = len(arr)
+    while i < total {
+        let end = i + n
+        if end > total {
+            end = total
+        }
+        push(result, slice(arr, i, end))
+        i = i + n
+    }
+    return result
+}
+
+export fn reverse(arr) {
+    let result = []
+    let i = len(arr) - 1
+    while i >= 0 {
+        push(result, arr[i])
+        i = i - 1
+    }
+    return result
+}
+
+export fn sum(arr) {
+    let total = 0
+    for item in arr {
+        total = total + item
+    }
+    return total
+}
+
+export fn product(arr) {
+    let total = 1
+    for item in arr {
+        total = total * item
+    }
+    return total
+}
+
+export fn group_by(arr, key_fn) {
+    let groups = {}
+    for item in arr {
+        let k = str(key_fn(item))
+        if index_of(keys(groups), k) < 0 {
+            groups[k] = []
+        }
+        push(groups[k], item)
+    }
+    return groups
+}
+
+export fn sort_by(arr, key_fn) {
+    let result = slice(arr, 0, len(arr))
+    let n = len(result)
+    let i = 1
+    while i < n {
+        let val = result[i]
+        let key = key_fn(val)
+        let j = i - 1
+        while j >= 0 && key_fn(result[j]) > key {
+            result[j + 1] = result[j]
+            j = j - 1
+        }
+        result[j + 1] = val
+        i = i + 1
+    }
+    return result
+}
+
+export fn sort(arr) {
+    return sort_by(arr, fn(x) { return x })
+}

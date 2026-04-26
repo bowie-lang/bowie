@@ -1,0 +1,188 @@
+# std/date — date and time utilities
+# Timestamps are Unix epoch integers (seconds since 1970-01-01 UTC).
+
+let WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+let MONTH_NAMES   = ["January", "February", "March", "April", "May", "June",
+                     "July", "August", "September", "October", "November", "December"]
+
+export fn now() {
+    return time_now()
+}
+
+export fn today() {
+    return time_format(time_now(), "%Y-%m-%d")
+}
+
+export fn iso(ts) {
+    return time_format(ts, "%Y-%m-%dT%H:%M:%S")
+}
+
+export fn format(ts, fmt) {
+    return time_format(ts, fmt)
+}
+
+export fn parts(ts) {
+    return time_parts(ts)
+}
+
+export fn utc_parts(ts) {
+    return time_utc_parts(ts)
+}
+
+export fn from_parts(yr, mo, dy, hr, mi, se) {
+    if is_null(hr) { hr = 0 }
+    if is_null(mi) { mi = 0 }
+    if is_null(se) { se = 0 }
+    return time_make(yr, mo, dy, hr, mi, se)
+}
+
+export fn parse_iso(s) {
+    # Accepts "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM:SS"
+    let date_part = s
+    let time_part = "00:00:00"
+    if contains(s, "T") {
+        let pieces = split(s, "T")
+        date_part = pieces[0]
+        time_part = pieces[1]
+    }
+    let d = split(date_part, "-")
+    let t = split(time_part, ":")
+    return time_make(int(d[0]), int(d[1]), int(d[2]),
+                     int(t[0]), int(t[1]), int(t[2]))
+}
+
+# Field accessors
+
+export fn year(ts) {
+    return time_parts(ts)["year"]
+}
+
+export fn month(ts) {
+    return time_parts(ts)["month"]
+}
+
+export fn day(ts) {
+    return time_parts(ts)["day"]
+}
+
+export fn hour(ts) {
+    return time_parts(ts)["hour"]
+}
+
+export fn minute(ts) {
+    return time_parts(ts)["minute"]
+}
+
+export fn second(ts) {
+    return time_parts(ts)["second"]
+}
+
+export fn weekday(ts) {
+    return time_parts(ts)["weekday"]
+}
+
+export fn day_of_year(ts) {
+    return time_parts(ts)["yday"]
+}
+
+# Arithmetic
+
+export fn add_seconds(ts, n) {
+    return ts + n
+}
+
+export fn add_minutes(ts, n) {
+    return ts + n * 60
+}
+
+export fn add_hours(ts, n) {
+    return ts + n * 3600
+}
+
+export fn add_days(ts, n) {
+    return ts + n * 86400
+}
+
+export fn add_weeks(ts, n) {
+    return ts + n * 604800
+}
+
+# Differences
+
+export fn diff_seconds(a, b) {
+    return a - b
+}
+
+export fn diff_minutes(a, b) {
+    return floor((a - b) / 60)
+}
+
+export fn diff_hours(a, b) {
+    return floor((a - b) / 3600)
+}
+
+export fn diff_days(a, b) {
+    return floor((a - b) / 86400)
+}
+
+# Comparisons
+
+export fn is_before(a, b) {
+    return a < b
+}
+
+export fn is_after(a, b) {
+    return a > b
+}
+
+export fn is_same_day(a, b) {
+    let pa = time_parts(a)
+    let pb = time_parts(b)
+    return pa["year"] == pb["year"] && pa["month"] == pb["month"] && pa["day"] == pb["day"]
+}
+
+# Boundaries
+
+export fn start_of_day(ts) {
+    let p = time_parts(ts)
+    return time_make(p["year"], p["month"], p["day"], 0, 0, 0)
+}
+
+export fn end_of_day(ts) {
+    let p = time_parts(ts)
+    return time_make(p["year"], p["month"], p["day"], 23, 59, 59)
+}
+
+export fn start_of_week(ts) {
+    let p = time_parts(ts)
+    let sod = time_make(p["year"], p["month"], p["day"], 0, 0, 0)
+    return sod - p["weekday"] * 86400
+}
+
+# Names
+
+export fn weekday_name(ts) {
+    return WEEKDAY_NAMES[time_parts(ts)["weekday"]]
+}
+
+export fn month_name(ts) {
+    return MONTH_NAMES[time_parts(ts)["month"] - 1]
+}
+
+# Relative helpers
+
+export fn is_today(ts) {
+    return is_same_day(ts, time_now())
+}
+
+export fn is_past(ts) {
+    return ts < time_now()
+}
+
+export fn is_future(ts) {
+    return ts > time_now()
+}
+
+export fn age_in_days(ts) {
+    return diff_days(time_now(), ts)
+}

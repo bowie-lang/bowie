@@ -67,6 +67,8 @@ $(TARGET): $(OBJS)
 
 install: $(TARGET)
 	cp $(TARGET) /usr/local/bin/bowie
+	mkdir -p /usr/local/lib/bowie/std
+	cp std/*.bow /usr/local/lib/bowie/std/
 
 clean:
 	rm -f src/lexer.o src/ast.o src/object.o src/env.o src/parser.o \

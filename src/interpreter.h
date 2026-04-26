@@ -18,6 +18,7 @@ typedef struct Interpreter {
     Object   *exports;        /* current module's export hash (NULL in main) */
     char     *current_file;   /* path of the file being evaluated */
     char     *project_root;   /* directory of the entry-point file; resolves "@/" aliases */
+    char     *std_path;       /* directory containing std lib modules; resolves "std/" imports */
 } Interpreter;
 
 Interpreter *interp_new(void);
