@@ -34,6 +34,37 @@
 			"additionalProperties": {
 				"type": "string"
 			}
+		},
+		"format": {
+			"type": "object",
+			"description": "Formatter configuration shared by the Bowie binary and editor tooling",
+			"additionalProperties": false,
+			"properties": {
+				"indentStyle": {
+					"type": "string",
+					"enum": ["spaces", "tabs"],
+					"description": "Indentation style used by the formatter"
+				},
+				"indentSize": {
+					"type": "integer",
+					"minimum": 0,
+					"description": "Number of spaces per indentation level"
+				},
+				"maxConsecutiveBlankLines": {
+					"type": "integer",
+					"minimum": 0,
+					"description": "Maximum number of consecutive blank lines to keep"
+				},
+				"spaceBeforeInlineComment": {
+					"type": "integer",
+					"minimum": 0,
+					"description": "Spaces inserted before inline # comments after code"
+				},
+				"finalNewline": {
+					"type": "boolean",
+					"description": "Whether formatted files should end with a trailing newline"
+				}
+			}
 		}
 	}
 }

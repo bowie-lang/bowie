@@ -1,7 +1,8 @@
 # std/array — functional array utilities
 
 export fn map(arr, f) {
-    let result = []
+    let result =[
+]
     for item in arr {
         push(result, f(item))
     }
@@ -9,7 +10,8 @@ export fn map(arr, f) {
 }
 
 export fn filter(arr, f) {
-    let result = []
+    let result =[
+]
     for item in arr {
         if f(item) {
             push(result, item)
@@ -42,12 +44,12 @@ export fn find_index(arr, f) {
         }
         i = i + 1
     }
-    return -1
+    return - 1
 }
 
 export fn every(arr, f) {
     for item in arr {
-        if !f(item) {
+        if!f(item) {
             return false
         }
     }
@@ -74,7 +76,8 @@ export fn count(arr, f) {
 }
 
 export fn flat(arr) {
-    let result = []
+    let result =[
+]
     for item in arr {
         if type(item) == "array" {
             for inner in item {
@@ -92,22 +95,26 @@ export fn flat_map(arr, f) {
 }
 
 export fn zip(a, b) {
-    let result = []
+    let result =[
+]
     let n = len(a)
     if len(b) < n {
         n = len(b)
     }
     let i = 0
     while i < n {
-        push(result, [a[i], b[i]])
+        push(result,[a[i], b[i
+    ]])
         i = i + 1
     }
     return result
 }
 
 export fn unique(arr) {
-    let seen = {}
-    let result = []
+    let seen = {
+}
+    let result =[
+]
     for item in arr {
         let key = str(item)
         if index_of(keys(seen), key) < 0 {
@@ -119,9 +126,10 @@ export fn unique(arr) {
 }
 
 export fn compact(arr) {
-    let result = []
+    let result =[
+]
     for item in arr {
-        if !is_null(item) && item != false {
+        if!is_null(item) && item != false {
             push(result, item)
         }
     }
@@ -137,7 +145,8 @@ export fn drop(arr, n) {
 }
 
 export fn chunk(arr, n) {
-    let result = []
+    let result =[
+]
     let i = 0
     let total = len(arr)
     while i < total {
@@ -152,10 +161,12 @@ export fn chunk(arr, n) {
 }
 
 export fn reverse(arr) {
-    let result = []
+    let result =[
+]
     let i = len(arr) - 1
     while i >= 0 {
-        push(result, arr[i])
+        push(result, arr[i
+    ])
         i = i - 1
     }
     return result
@@ -178,11 +189,13 @@ export fn product(arr) {
 }
 
 export fn group_by(arr, key_fn) {
-    let groups = {}
+    let groups = {
+}
     for item in arr {
         let k = str(key_fn(item))
         if index_of(keys(groups), k) < 0 {
-            groups[k] = []
+            groups[k] =[
+        ]
         }
         push(groups[k], item)
     }
@@ -194,11 +207,13 @@ export fn sort_by(arr, key_fn) {
     let n = len(result)
     let i = 1
     while i < n {
-        let val = result[i]
+        let val = result[i
+    ]
         let key = key_fn(val)
         let j = i - 1
         while j >= 0 && key_fn(result[j]) > key {
-            result[j + 1] = result[j]
+            result[j + 1] = result[j
+        ]
             j = j - 1
         }
         result[j + 1] = val
@@ -208,5 +223,6 @@ export fn sort_by(arr, key_fn) {
 }
 
 export fn sort(arr) {
-    return sort_by(arr, fn(x) { return x })
+    return sort_by(arr, fn(x) {return x
+})
 }

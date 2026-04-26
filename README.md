@@ -49,6 +49,32 @@ Hello!
 >> exit()
 ```
 
+**Format a file (stdout):**
+
+```sh
+bowie format script.bow
+```
+
+**Format in place:**
+
+```sh
+bowie format --write script.bow
+```
+
+Formatter behavior can be configured in `bowie.json`:
+
+```json
+{
+  "format": {
+    "indentStyle": "spaces",
+    "indentSize": 4,
+    "maxConsecutiveBlankLines": 1,
+    "spaceBeforeInlineComment": 2,
+    "finalNewline": true
+  }
+}
+```
+
 ## Language
 
 ### Types
