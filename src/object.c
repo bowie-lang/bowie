@@ -328,7 +328,7 @@ char *obj_inspect(Object *o) {
             return strdup("null");
         case OBJ_ARRAY: {
             /* build "[a, b, c]" */
-            int   sz  = 2;
+            int   sz  = 3;
             char *out = malloc(sz);
             out[0]    = '['; out[1] = '\0';
             for (int i = 0; i < o->array.elems.count; i++) {
@@ -344,7 +344,7 @@ char *obj_inspect(Object *o) {
             return out;
         }
         case OBJ_HASH: {
-            int   sz  = 2;
+            int   sz  = 3;
             char *out = malloc(sz);
             out[0]    = '{'; out[1] = '\0';
             int first = 1;

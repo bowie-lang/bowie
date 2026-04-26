@@ -1,6 +1,7 @@
 #include "builtins.h"
 #include "http.h"
 #include "interpreter.h"
+#include "mustache.h"
 #ifndef _WIN32
 #include "coro.h"
 #include "event_loop.h"
@@ -1286,6 +1287,42 @@ static Object *bw_is_null(ObjList *args) {
     return obj_bool(ARG(0)->type == OBJ_NULL);
 }
 
+/* ---- Mustache templates ---- */
+static Object *bw_render_template(ObjList *args) {
+    REQUIRE(2, "render_template");
+    if (ARG(0)->type != OBJ_STRING)
+        return obj_error_typef("TypeMismatchError", "render_template(): arg 1 must be string");
+    if (ARG(1)->type != OBJ_HASH)
+        return obj_error_typef("TypeMismatchError", "render_template(): arg 2 must be hash");
+    char *err = NULL;
+    char *html = mustache_render(ARG(0)->string.str, ARG(1), &err);
+    if (!html) { Object *e = obj_error_typef("TemplateError", "%s", err); free(err); return e; }
+    Object *o = obj_string(html); free(html); return o;
+}
+
+static Object *bw_render_file(ObjList *args) {
+    REQUIRE(2, "render_file");
+    if (ARG(0)->type != OBJ_STRING)
+        return obj_error_typef("TypeMismatchError", "render_file(): arg 1 must be string path");
+    if (ARG(1)->type != OBJ_HASH)
+        return obj_error_typef("TypeMismatchError", "render_file(): arg 2 must be hash");
+    FILE *f = fopen(ARG(0)->string.str, "rb");
+    if (!f) return obj_error_typef("IOError", "render_file(): cannot open '%s': %s",
+                                   ARG(0)->string.str, strerror(errno));
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *buf = malloc(sz + 1);
+    fread(buf, 1, sz, f);
+    buf[sz] = '\0';
+    fclose(f);
+    char *err = NULL;
+    char *html = mustache_render(buf, ARG(1), &err);
+    free(buf);
+    if (!html) { Object *e = obj_error_typef("TemplateError", "%s", err); free(err); return e; }
+    Object *o = obj_string(html); free(html); return o;
+}
+
 /* ---- Register ---- */
 #define REG(name, fn) env_set(env, name, (tmp = obj_builtin(fn, name))); obj_release(tmp)
 
@@ -1367,4 +1404,8 @@ void builtins_register(Env *env) {
     REG("exit",        bw_exit);
     REG("assert",      bw_assert);
     REG("is_null",     bw_is_null);
+
+    /* Templates */
+    REG("render_template", bw_render_template);
+    REG("render_file",     bw_render_file);
 }

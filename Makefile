@@ -51,7 +51,7 @@ LDFLAGS = -lm $(POSTGRES_LIBS) $(CURL_LIBS)
 TARGET  = bowie
 SRCS    = src/lexer.c src/ast.c src/object.c src/env.c \
           src/parser.c src/interpreter.c src/builtins.c \
-          src/http.c src/coro.c src/event_loop.c \
+          src/mustache.c src/http.c src/coro.c src/event_loop.c \
           $(POSTGRES_MODULE) src/main.c
 OBJS    = $(SRCS:.c=.o)
 
@@ -70,6 +70,6 @@ install: $(TARGET)
 
 clean:
 	rm -f src/lexer.o src/ast.o src/object.o src/env.o src/parser.o \
-	      src/interpreter.o src/builtins.o src/http.o src/coro.o \
+	      src/interpreter.o src/builtins.o src/mustache.o src/http.o src/coro.o \
 	      src/event_loop.o src/postgres.o \
 	      src/postgres_disabled.o src/main.o $(TARGET)
