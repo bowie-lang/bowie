@@ -1,0 +1,116 @@
+# std/test — unit testing framework
+
+let _tests   = 0
+let _passed  = 0
+let _failed  = 0
+let _suite   = ""
+let _failures = []
+
+export fn describe(name, f) {
+    _suite = name
+    println("[" + name + "]")
+    f()
+}
+
+export fn it(name, f) {
+    _tests = _tests + 1
+    try {
+        f()
+        _passed = _passed + 1
+        println("  ✓ " + name)
+    } catch (err) {
+        _failed = _failed + 1
+        let msg = str(err)
+        if type(err) == "hash" {
+            msg = str(err["message"])
+        }
+        push(_failures, _suite + " > " + name + ": " + msg)
+        println("  ✗ " + name + ": " + msg)
+    }
+}
+
+export fn expect(actual) {
+    return {
+        "to_equal": fn(expected) {
+            let t = type(actual)
+            let match = false
+            if t == "array" || t == "hash" {
+                match = json_encode(actual) == json_encode(expected)
+            } else {
+                match = actual == expected
+            }
+            if !match {
+                throw "expected " + str(expected) + ", got " + str(actual)
+            }
+        },
+        "to_not_equal": fn(expected) {
+            let t = type(actual)
+            let match = false
+            if t == "array" || t == "hash" {
+                match = json_encode(actual) == json_encode(expected)
+            } else {
+                match = actual == expected
+            }
+            if match {
+                throw "expected value != " + str(expected)
+            }
+        },
+        "to_be_true": fn() {
+            if !actual {
+                throw "expected truthy, got " + str(actual)
+            }
+        },
+        "to_be_false": fn() {
+            if actual {
+                throw "expected falsy, got " + str(actual)
+            }
+        },
+        "to_be_null": fn() {
+            if !is_null(actual) {
+                throw "expected null, got " + str(actual)
+            }
+        },
+        "to_contain": fn(item) {
+            if type(actual) == "string" {
+                if !contains(actual, str(item)) {
+                    throw "expected string to contain " + str(item)
+                }
+            } else {
+                if index_of(actual, item) < 0 {
+                    throw "expected array to contain " + str(item)
+                }
+            }
+        },
+        "to_be_greater_than": fn(n) {
+            if actual <= n {
+                throw "expected " + str(actual) + " > " + str(n)
+            }
+        },
+        "to_be_less_than": fn(n) {
+            if actual >= n {
+                throw "expected " + str(actual) + " < " + str(n)
+            }
+        },
+        "to_have_len": fn(n) {
+            let l = len(actual)
+            if l != n {
+                throw "expected len " + str(n) + ", got " + str(l)
+            }
+        }
+    }
+}
+
+export fn run_tests() {
+    println("")
+    if _failed == 0 {
+        println("All " + str(_tests) + " tests passed.")
+    } else {
+        println(str(_passed) + "/" + str(_tests) + " passed, " + str(_failed) + " failed.")
+        println("")
+        println("Failures:")
+        for msg in _failures {
+            println("  - " + msg)
+        }
+        exit(1)
+    }
+}
