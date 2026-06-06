@@ -628,11 +628,12 @@ static Object *bw_split(ObjList *args) {
         return arr;
     }
     char *copy = strdup(src);
-    char *token = strtok(copy, delim);
+    char *saveptr = NULL;
+    char *token = strtok_r(copy, delim, &saveptr);
     while (token) {
         Object *s = obj_string(token);
         array_push(arr, s); obj_release(s);
-        token = strtok(NULL, delim);
+        token = strtok_r(NULL, delim, &saveptr);
     }
     free(copy);
     return arr;
@@ -1253,8 +1254,12 @@ static Object *bw_json_try_decode(ObjList *args) {
         obj_release(value);
     } else {
         hash_set(out, "ok", obj_bool(0));
-        hash_set(out, "error", obj_string(j.err[0] ? j.err : "invalid JSON"));
-        hash_set(out, "pos", obj_int(j.err_pos >= 0 ? j.err_pos : j.pos));
+        Object *_err = obj_string(j.err[0] ? j.err : "invalid JSON");
+        hash_set(out, "error", _err);
+        obj_release(_err);
+        Object *_pos = obj_int(j.err_pos >= 0 ? j.err_pos : j.pos);
+        hash_set(out, "pos", _pos);
+        obj_release(_pos);
     }
     return out;
 }
@@ -1386,11 +1391,17 @@ static Object *bw_json_response(ObjList *args) {
             }
         }
     }
-    hash_set(headers, "Content-Type", obj_string("application/json"));
+    Object *_ct = obj_string("application/json");
+    hash_set(headers, "Content-Type", _ct);
+    obj_release(_ct);
 
-    hash_set(resp, "status", obj_int(status));
+    Object *_status = obj_int(status);
+    hash_set(resp, "status", _status);
+    obj_release(_status);
     hash_set(resp, "headers", headers);
-    hash_set(resp, "body", obj_string(body_str ? body_str : ""));
+    Object *_body = obj_string(body_str ? body_str : "");
+    hash_set(resp, "body", _body);
+    obj_release(_body);
     obj_release(headers);
     free(body_owned);
     return resp;
@@ -1556,14 +1567,17 @@ static Object *bw_time_parts(ObjList *args) {
     time_t ts = (time_t)ARG(0)->int_val;
     struct tm *t = localtime(&ts);
     Object *h = obj_hash();
-    hash_set(h, "year",    obj_int(t->tm_year + 1900));
-    hash_set(h, "month",   obj_int(t->tm_mon + 1));
-    hash_set(h, "day",     obj_int(t->tm_mday));
-    hash_set(h, "hour",    obj_int(t->tm_hour));
-    hash_set(h, "minute",  obj_int(t->tm_min));
-    hash_set(h, "second",  obj_int(t->tm_sec));
-    hash_set(h, "weekday", obj_int(t->tm_wday));
-    hash_set(h, "yday",    obj_int(t->tm_yday + 1));
+    Object *_v;
+#define SET_INT(key, expr) _v = obj_int(expr); hash_set(h, key, _v); obj_release(_v)
+    SET_INT("year",    t->tm_year + 1900);
+    SET_INT("month",   t->tm_mon + 1);
+    SET_INT("day",     t->tm_mday);
+    SET_INT("hour",    t->tm_hour);
+    SET_INT("minute",  t->tm_min);
+    SET_INT("second",  t->tm_sec);
+    SET_INT("weekday", t->tm_wday);
+    SET_INT("yday",    t->tm_yday + 1);
+#undef SET_INT
     return h;
 }
 
@@ -1574,14 +1588,17 @@ static Object *bw_time_utc_parts(ObjList *args) {
     time_t ts = (time_t)ARG(0)->int_val;
     struct tm *t = gmtime(&ts);
     Object *h = obj_hash();
-    hash_set(h, "year",    obj_int(t->tm_year + 1900));
-    hash_set(h, "month",   obj_int(t->tm_mon + 1));
-    hash_set(h, "day",     obj_int(t->tm_mday));
-    hash_set(h, "hour",    obj_int(t->tm_hour));
-    hash_set(h, "minute",  obj_int(t->tm_min));
-    hash_set(h, "second",  obj_int(t->tm_sec));
-    hash_set(h, "weekday", obj_int(t->tm_wday));
-    hash_set(h, "yday",    obj_int(t->tm_yday + 1));
+    Object *_v;
+#define SET_INT(key, expr) _v = obj_int(expr); hash_set(h, key, _v); obj_release(_v)
+    SET_INT("year",    t->tm_year + 1900);
+    SET_INT("month",   t->tm_mon + 1);
+    SET_INT("day",     t->tm_mday);
+    SET_INT("hour",    t->tm_hour);
+    SET_INT("minute",  t->tm_min);
+    SET_INT("second",  t->tm_sec);
+    SET_INT("weekday", t->tm_wday);
+    SET_INT("yday",    t->tm_yday + 1);
+#undef SET_INT
     return h;
 }
 

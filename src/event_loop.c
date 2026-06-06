@@ -4,6 +4,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <poll.h>
 
 #ifdef BOWIE_CURL
 #include <curl/curl.h>
@@ -28,8 +29,43 @@ void event_loop_free(void) {
     curl_global_cleanup();
 #endif
     free(g_event_loop->ready);
+    free(g_event_loop->watchers);
     free(g_event_loop);
     g_event_loop = NULL;
+}
+
+void event_loop_watch_fd(int fd, FdCallback cb, void *ctx) {
+    if (!g_event_loop) return;
+    if (g_event_loop->watcher_count >= g_event_loop->watcher_cap) {
+        g_event_loop->watcher_cap = g_event_loop->watcher_cap ? g_event_loop->watcher_cap * 2 : 16;
+        g_event_loop->watchers = realloc(g_event_loop->watchers,
+                                         g_event_loop->watcher_cap * sizeof(FdWatcher));
+    }
+    FdWatcher *w = &g_event_loop->watchers[g_event_loop->watcher_count++];
+    w->fd  = fd;
+    w->cb  = cb;
+    w->ctx = ctx;
+}
+
+void event_loop_unwatch_fd(int fd) {
+    if (!g_event_loop) return;
+    for (int i = 0; i < g_event_loop->watcher_count; i++) {
+        if (g_event_loop->watchers[i].fd == fd) {
+            /* swap-remove */
+            g_event_loop->watchers[i] =
+                g_event_loop->watchers[--g_event_loop->watcher_count];
+            return;
+        }
+    }
+}
+
+void event_loop_add_server(void) {
+    if (g_event_loop) g_event_loop->active_servers++;
+}
+
+void event_loop_remove_server(void) {
+    if (g_event_loop && g_event_loop->active_servers > 0)
+        g_event_loop->active_servers--;
 }
 
 void event_loop_enqueue(Coro *c) {
@@ -45,7 +81,9 @@ void event_loop_enqueue(Coro *c) {
 
 int event_loop_has_work(void) {
     if (!g_event_loop) return 0;
+    if (g_event_loop->active_servers > 0) return 1;
     if (g_event_loop->ready_count > 0) return 1;
+    if (g_event_loop->watcher_count > 0) return 1;
 #ifdef BOWIE_CURL
     if (g_event_loop->pending_io > 0) return 1;
 #endif
@@ -255,7 +293,6 @@ void event_loop_run(void) {
     while (event_loop_has_work()) {
         /* drain the ready queue */
         while (g_event_loop->ready_count > 0) {
-            /* pop from front */
             Coro *c = g_event_loop->ready[0];
             g_event_loop->ready_count--;
             if (g_event_loop->ready_count > 0)
@@ -265,10 +302,43 @@ void event_loop_run(void) {
             coro_resume(c);
 
             if (c->state == CORO_DONE) {
-                promise_resolve(c->promise, c->result);
+                if (c->promise)
+                    promise_resolve(c->promise, c->result);
                 coro_free(c);
             }
         }
+
+        /* poll watched FDs (HTTP listeners, client sockets, PG sockets) */
+        int nw = g_event_loop->watcher_count;
+        if (nw > 0) {
+            struct pollfd *pfds = malloc(nw * sizeof(struct pollfd));
+            for (int i = 0; i < nw; i++) {
+                pfds[i].fd      = g_event_loop->watchers[i].fd;
+                pfds[i].events  = POLLIN;
+                pfds[i].revents = 0;
+            }
+            int timeout_ms = (g_event_loop->ready_count > 0) ? 0 : 1;
+            poll(pfds, nw, timeout_ms);
+            /* iterate a snapshot — callbacks may mutate watchers[] */
+            for (int i = 0; i < nw; i++) {
+                if (pfds[i].revents & (POLLIN | POLLERR | POLLHUP)) {
+                    /* find the watcher again in case array shifted */
+                    for (int j = 0; j < g_event_loop->watcher_count; j++) {
+                        if (g_event_loop->watchers[j].fd == pfds[i].fd) {
+                            g_event_loop->watchers[j].cb(pfds[i].fd,
+                                                         g_event_loop->watchers[j].ctx);
+                            break;
+                        }
+                    }
+                }
+            }
+            free(pfds);
+        } else if (g_event_loop->active_servers > 0) {
+            /* nothing to poll but a server is running — brief yield */
+            struct pollfd dummy; dummy.fd = -1; dummy.events = 0;
+            poll(&dummy, 0, 1);
+        }
+
 #ifdef BOWIE_CURL
         poll_curl();
 #endif

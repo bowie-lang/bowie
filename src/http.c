@@ -1,5 +1,7 @@
 #include "http.h"
 #include "env.h"
+#include "event_loop.h"
+#include "coro.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,9 +14,11 @@
   typedef int socklen_t;
   #define close closesocket
 #else
-  #include <sys/select.h>
+  #include <fcntl.h>
+  #include <poll.h>
   #include <sys/socket.h>
   #include <netinet/in.h>
+  #include <netinet/tcp.h>
   #include <arpa/inet.h>
   #include <netdb.h>
   #include <unistd.h>
@@ -41,15 +45,6 @@ static int str_eq_ci(const char *a, const char *b) {
     return *a == '\0' && *b == '\0';
 }
 
-#ifndef _WIN32
-static volatile sig_atomic_t http_interrupt = 0;
-
-static void http_sig_handler(int s) {
-    (void)s;
-    http_interrupt = 1;
-}
-#endif
-
 /* ---- Listen sockets (IPv4 + IPv6) ----
  * Tools that resolve "localhost" to ::1 first need an IPv6 listener; otherwise
  * the client can stall for a long fallback timeout when only 0.0.0.0 (IPv4) is bound.
@@ -59,6 +54,9 @@ static int listen_ipv4(uint16_t port) {
     if (fd < 0) return -1;
     int opt = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
+#ifdef SO_REUSEPORT
+    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, (const char *)&opt, sizeof(opt));
+#endif
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family      = AF_INET;
@@ -68,7 +66,7 @@ static int listen_ipv4(uint16_t port) {
         close(fd);
         return -1;
     }
-    if (listen(fd, 128) < 0) {
+    if (listen(fd, SOMAXCONN) < 0) {
         close(fd);
         return -1;
     }
@@ -80,8 +78,10 @@ static int listen_ipv6(uint16_t port) {
     if (fd < 0) return -1;
     int opt = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
+#ifdef SO_REUSEPORT
+    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, (const char *)&opt, sizeof(opt));
+#endif
 #ifdef IPV6_V6ONLY
-    /* Separate socket from IPv4; ::1 hits this listener immediately. */
     int v6only = 1;
     setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&v6only, sizeof(v6only));
 #endif
@@ -94,7 +94,7 @@ static int listen_ipv6(uint16_t port) {
         close(fd);
         return -1;
     }
-    if (listen(fd, 128) < 0) {
+    if (listen(fd, SOMAXCONN) < 0) {
         close(fd);
         return -1;
     }
@@ -110,16 +110,21 @@ static void parse_query(Object *req, const char *query_str) {
         obj_release(query);
         return;
     }
-    char *token   = strtok(copy, "&");
+    char *saveptr = NULL;
+    char *token   = strtok_r(copy, "&", &saveptr);
     while (token) {
         char *eq = strchr(token, '=');
         if (eq) {
             *eq = '\0';
-            hash_set(query, token, obj_string(eq + 1));
+            Object *_v = obj_string(eq + 1);
+            hash_set(query, token, _v);
+            obj_release(_v);
         } else {
-            hash_set(query, token, obj_string(""));
+            Object *_v = obj_string("");
+            hash_set(query, token, _v);
+            obj_release(_v);
         }
-        token = strtok(NULL, "&");
+        token = strtok_r(NULL, "&", &saveptr);
     }
     free(copy);
     hash_set(req, "query", query);
@@ -133,8 +138,9 @@ static Object *parse_request(const char *raw) {
     /* Copy so we can tokenize */
     char *buf  = dup_cstr(raw);
     if (!buf) { obj_release(hdrs); obj_release(req); return NULL; }
-    char *line = strtok(buf, "\r\n");
-    if (!line) { free(buf); obj_release(req); return NULL; }
+    char *saveptr = NULL;
+    char *line = strtok_r(buf, "\r\n", &saveptr);
+    if (!line) { free(buf); obj_release(hdrs); obj_release(req); return NULL; }
 
     /* Request line: METHOD path HTTP/1.x */
     char method[16] = {0}, path_raw[1024] = {0}, proto[16] = {0};
@@ -154,11 +160,15 @@ static Object *parse_request(const char *raw) {
         parse_query(req, "");
     }
 
-    hash_set(req, "method", obj_string(method));
-    hash_set(req, "path",   obj_string(path));
+    Object *_method = obj_string(method);
+    hash_set(req, "method", _method);
+    obj_release(_method);
+    Object *_path = obj_string(path);
+    hash_set(req, "path", _path);
+    obj_release(_path);
 
     /* Headers */
-    while ((line = strtok(NULL, "\r\n")) && line[0] != '\0') {
+    while ((line = strtok_r(NULL, "\r\n", &saveptr)) && line[0] != '\0') {
         char *colon = strchr(line, ':');
         if (!colon) break;
         *colon = '\0';
@@ -166,7 +176,9 @@ static Object *parse_request(const char *raw) {
         while (*val == ' ') val++;
         /* lowercase the key */
         for (char *p = line; *p; p++) *p = tolower((unsigned char)*p);
-        hash_set(hdrs, line, obj_string(val));
+        Object *_hv = obj_string(val);
+        hash_set(hdrs, line, _hv);
+        obj_release(_hv);
         *colon = ':';
     }
     hash_set(req, "headers", hdrs);
@@ -177,7 +189,9 @@ static Object *parse_request(const char *raw) {
     const char *body_start = strstr(raw, "\r\n\r\n");
     if (body_start) body_start += 4;
     else body_start = "";
-    hash_set(req, "body", obj_string(body_start));
+    Object *_body = obj_string(body_start);
+    hash_set(req, "body", _body);
+    obj_release(_body);
 
     free(buf);
     return req;
@@ -246,7 +260,8 @@ static void send_response(int client_fd, int status, const char *body,
     int  hlen = snprintf(header_buf, sizeof(header_buf),
                          "HTTP/1.1 %d %s\r\n"
                          "Content-Length: %d\r\n"
-                         "Connection: close\r\n",
+                         "Connection: keep-alive\r\n"
+                         "Keep-Alive: timeout=5\r\n",
                          status, status_text, body_len);
 
     /* Extra headers from response hash */
@@ -374,15 +389,27 @@ static void handle_request(int client_fd, Object *server,
     obj_release(result);
 }
 
-static void serve_one_client(int client_fd, Object *server, Interpreter *it, Env *env,
-                             char *buf) {
-    int n = recv(client_fd, buf, BUF_SIZE - 1, 0);
-    if (n > 0) {
-        buf[n] = '\0';
-        handle_request(client_fd, server, it, env, buf);
-    }
-    close(client_fd);
-}
+/* ---- Connection context for event-driven / coroutine handling ---- */
+typedef struct {
+    int          fd;
+    char        *buf;
+    int          buf_len;
+    Object      *server;
+    Interpreter *it;
+    Env         *env;
+} HttpConnCtx;
+
+typedef struct {
+    Object      *server;
+    Interpreter *it;
+    Env         *env;
+    int          fd4;
+    int          fd6;
+} HttpServerCtx;
+
+/* Forward declarations */
+static void on_new_connection(int listen_fd, void *ctx);
+static void http_conn_coro(struct Coro *self, void *arg);
 
 /* ---- Listen callback (Express-style) ---- */
 static void invoke_listen_cb(Object *cb, int port, Interpreter *it, Env *env) {
@@ -414,7 +441,119 @@ static void invoke_listen_cb(Object *cb, int port, Interpreter *it, Env *env) {
     objlist_free(&call_args);
 }
 
-/* ---- Event loop ---- */
+/* ---- Coroutine per connection ---- */
+
+/* FdCallback wrapper: re-enqueues the coroutine when fd becomes readable */
+static void resume_coro_cb(int fd, void *ctx) {
+    (void)fd;
+    Coro *c = (Coro *)ctx;
+    event_loop_unwatch_fd(fd);
+    event_loop_enqueue(c);
+}
+
+/*
+ * One coroutine per HTTP connection. Loops over keep-alive requests on the
+ * same fd. Yields when recv would block so other connections can make progress.
+ */
+static void http_conn_coro(struct Coro *self, void *arg) {
+    HttpConnCtx *conn = (HttpConnCtx *)arg;
+    int fd = conn->fd;
+
+    for (;;) {
+        /* Receive until we have a complete HTTP request header block */
+        conn->buf_len = 0;
+        for (;;) {
+            /* socket is O_NONBLOCK — EAGAIN/EWOULDBLOCK means no data yet */
+            int n = recv(fd, conn->buf + conn->buf_len,
+                         BUF_SIZE - conn->buf_len - 1, 0);
+            if (n > 0) {
+                conn->buf_len += n;
+                conn->buf[conn->buf_len] = '\0';
+                if (strstr(conn->buf, "\r\n\r\n")) break;
+                if (conn->buf_len >= BUF_SIZE - 1) break; /* oversized request */
+            } else if (n == 0) {
+                goto done; /* connection closed by client */
+            } else {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    /* Register fd with event loop and yield until readable */
+                    event_loop_watch_fd(fd, resume_coro_cb, self);
+                    coro_yield();
+                    /* resume_coro_cb already called event_loop_unwatch_fd */
+                    continue;
+                }
+                goto done; /* real error */
+            }
+        }
+
+        if (conn->buf_len == 0) goto done;
+        handle_request(fd, conn->server, conn->it, conn->env, conn->buf);
+
+        /* Check if client wants to close (Connection: close in request) */
+        if (strstr(conn->buf, "Connection: close") ||
+            strstr(conn->buf, "connection: close")) {
+            goto done;
+        }
+    }
+
+done:
+    close(fd);
+    free(conn->buf);
+    free(conn);
+}
+
+/* Called by event loop when listener socket is readable */
+static void on_new_connection(int listen_fd, void *ctx) {
+    HttpServerCtx *sctx = (HttpServerCtx *)ctx;
+
+    /* Accept all pending connections in one callback invocation */
+    for (;;) {
+        struct sockaddr_storage addr;
+        socklen_t addrlen = sizeof(addr);
+        int client_fd = accept(listen_fd, (struct sockaddr *)&addr, &addrlen);
+        if (client_fd < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) break; /* no more */
+            if (errno == EINTR) continue;
+            fprintf(stderr, "accept(): %s\n", strerror(errno));
+            break;
+        }
+
+        /* Non-blocking + no Nagle delay */
+        fcntl(client_fd, F_SETFL, O_NONBLOCK);
+        int one = 1;
+        setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY,
+                   (const char *)&one, sizeof(one));
+
+        HttpConnCtx *conn = malloc(sizeof(HttpConnCtx));
+        conn->fd      = client_fd;
+        conn->buf     = malloc(BUF_SIZE);
+        conn->buf_len = 0;
+        conn->server  = sctx->server;
+        conn->it      = sctx->it;
+        conn->env     = sctx->env;
+
+        Coro *c = coro_new_c(http_conn_coro, conn);
+        event_loop_enqueue(c);
+    }
+}
+
+/* ---- Signal handling for graceful shutdown ---- */
+#ifndef _WIN32
+static volatile sig_atomic_t http_interrupt = 0;
+static HttpServerCtx *g_server_ctx = NULL;
+
+static void http_sig_handler(int s) {
+    (void)s;
+    http_interrupt = 1;
+    if (g_server_ctx) {
+        /* Close listener FDs so event loop stops accepting */
+        if (g_server_ctx->fd4 >= 0) { close(g_server_ctx->fd4); g_server_ctx->fd4 = -1; }
+        if (g_server_ctx->fd6 >= 0) { close(g_server_ctx->fd6); g_server_ctx->fd6 = -1; }
+        event_loop_remove_server();
+    }
+}
+#endif
+
+/* ---- Public API: non-blocking setup, returns immediately ---- */
 void http_serve(Object *server, Interpreter *it, Env *env) {
     int port = server->server.port;
 
@@ -428,11 +567,15 @@ void http_serve(Object *server, Interpreter *it, Env *env) {
         fprintf(stderr, "listen (IPv4): %s\n", strerror(errno));
         return;
     }
+    fcntl(fd4, F_SETFL, O_NONBLOCK);
 
     int fd6 = listen_ipv6((uint16_t)port);
     if (fd6 < 0) {
-        fprintf(stderr, "note: IPv6 listen not available (%s); use http://127.0.0.1:%d if localhost is slow\n",
+        fprintf(stderr, "note: IPv6 listen not available (%s); "
+                "use http://127.0.0.1:%d if localhost is slow\n",
                 strerror(errno), port);
+    } else {
+        fcntl(fd6, F_SETFL, O_NONBLOCK);
     }
 
     if (server->server.listen_cb) {
@@ -446,85 +589,28 @@ void http_serve(Object *server, Interpreter *it, Env *env) {
 
     server->server.fd = fd4;
 
+    HttpServerCtx *sctx = malloc(sizeof(HttpServerCtx));
+    sctx->server = server;
+    sctx->it     = it;
+    sctx->env    = env;
+    sctx->fd4    = fd4;
+    sctx->fd6    = fd6;
+
 #ifndef _WIN32
+    g_server_ctx = sctx;
     struct sigaction sa;
     sa.sa_handler = http_sig_handler;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0; /* no SA_RESTART — let select() return EINTR */
-    sigaction(SIGINT, &sa, NULL);
+    sa.sa_flags = 0;
+    sigaction(SIGINT,  &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 #endif
 
-    char *buf = malloc(BUF_SIZE);
-    for (;;) {
-        fd_set rfds;
-        FD_ZERO(&rfds);
-        FD_SET(fd4, &rfds);
-#ifdef _WIN32
-        unsigned maxfd = (unsigned)fd4;
-#else
-        int maxfd = fd4;
-#endif
-        if (fd6 >= 0) {
-            FD_SET(fd6, &rfds);
-#ifdef _WIN32
-            if ((unsigned)fd6 > maxfd) maxfd = (unsigned)fd6;
-#else
-            if (fd6 > maxfd) maxfd = fd6;
-#endif
-        }
-        /* Winsock ignores nfds; POSIX uses it as highest fd + 1 */
-#ifdef _WIN32
-        if (select(0, &rfds, NULL, NULL, NULL) < 0) {
-#else
-        if (select(maxfd + 1, &rfds, NULL, NULL, NULL) < 0) {
-#endif
-            if (errno == EINTR) {
-#ifndef _WIN32
-                if (http_interrupt) break;
-#endif
-                continue;
-            }
-            fprintf(stderr, "select(): %s\n", strerror(errno));
-            continue;
-        }
-        if (FD_ISSET(fd4, &rfds)) {
-            struct sockaddr_storage client_addr;
-            socklen_t client_len = sizeof(client_addr);
-            int client_fd = accept(fd4, (struct sockaddr *)&client_addr, &client_len);
-            if (client_fd < 0) {
-                if (errno == EINTR) {
-#ifndef _WIN32
-                    if (http_interrupt) break;
-#endif
-                    continue;
-                }
-                fprintf(stderr, "accept(): %s\n", strerror(errno));
-                continue;
-            }
-            serve_one_client(client_fd, server, it, env, buf);
-        }
-        if (fd6 >= 0 && FD_ISSET(fd6, &rfds)) {
-            struct sockaddr_storage client_addr;
-            socklen_t client_len = sizeof(client_addr);
-            int client_fd = accept(fd6, (struct sockaddr *)&client_addr, &client_len);
-            if (client_fd < 0) {
-                if (errno == EINTR) {
-#ifndef _WIN32
-                    if (http_interrupt) break;
-#endif
-                    continue;
-                }
-                fprintf(stderr, "accept(): %s\n", strerror(errno));
-                continue;
-            }
-            serve_one_client(client_fd, server, it, env, buf);
-        }
-    }
-
-    close(fd4);
-    if (fd6 >= 0) close(fd6);
-    free(buf);
+    event_loop_watch_fd(fd4, on_new_connection, sctx);
+    if (fd6 >= 0)
+        event_loop_watch_fd(fd6, on_new_connection, sctx);
+    event_loop_add_server();
+    /* Returns immediately — event_loop_run() drives the server */
 }
 
 /* ---- Outbound fetch ---- */

@@ -17,24 +17,36 @@ Coro       *g_running_coro = NULL;
 
 static void coro_trampoline(void) {
     Coro *self = g_running_coro;
-    Object *result = interp_call_fn(self->interp, self->fn_obj, &self->call_args);
-    /* Unwrap OBJ_RETURN if needed */
-    if (result && result->type == OBJ_RETURN) {
-        Object *v = result->ret.value;
-        obj_retain(v);
-        obj_release(result);
-        result = v;
+    if (self->c_func) {
+        self->c_func(self, self->c_arg);
+    } else {
+        Object *result = interp_call_fn(self->interp, self->fn_obj, &self->call_args);
+        if (result && result->type == OBJ_RETURN) {
+            Object *v = result->ret.value;
+            obj_retain(v);
+            obj_release(result);
+            result = v;
+        }
+        self->result = result;
     }
-    self->result = result; /* event loop will resolve the promise */
-    self->state  = CORO_DONE;
+    self->state = CORO_DONE;
     swapcontext(&self->ctx, &g_scheduler_ctx);
-    /* Should never reach here */
+}
+
+static Coro *coro_alloc(void) {
+    Coro *c  = calloc(1, sizeof(Coro));
+    c->stack = malloc(CORO_STACK_SIZE);
+    c->state = CORO_READY;
+    getcontext(&c->ctx);
+    c->ctx.uc_stack.ss_sp   = c->stack;
+    c->ctx.uc_stack.ss_size = CORO_STACK_SIZE;
+    c->ctx.uc_link          = NULL;
+    makecontext(&c->ctx, coro_trampoline, 0);
+    return c;
 }
 
 Coro *coro_new(struct Interpreter *it, Object *fn_obj, ObjList *args, Object *promise) {
-    Coro *c    = calloc(1, sizeof(Coro));
-    c->stack   = malloc(CORO_STACK_SIZE);
-    c->state   = CORO_READY;
+    Coro *c    = coro_alloc();
     c->promise = promise;
     c->interp  = it;
     c->fn_obj  = fn_obj;
@@ -46,13 +58,13 @@ Coro *coro_new(struct Interpreter *it, Object *fn_obj, ObjList *args, Object *pr
         obj_retain(args->items[i]);
         objlist_push(&c->call_args, args->items[i]);
     }
+    return c;
+}
 
-    getcontext(&c->ctx);
-    c->ctx.uc_stack.ss_sp   = c->stack;
-    c->ctx.uc_stack.ss_size = CORO_STACK_SIZE;
-    c->ctx.uc_link          = NULL;
-    makecontext(&c->ctx, coro_trampoline, 0);
-
+Coro *coro_new_c(CoroCFunc fn, void *arg) {
+    Coro *c  = coro_alloc();
+    c->c_func = fn;
+    c->c_arg  = arg;
     return c;
 }
 
